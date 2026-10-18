@@ -30,16 +30,16 @@ def generate_all_fixtures(output_dir: Path) -> None:
     save_contract_table(df_stations, "stations", output_dir / "sample_stations.parquet")
 
     # 2. Population (H3 res 9 cells)
-    # Valid H3 res 9 indices around central Budapest
+    # Valid H3 res 9 indices around central Budapest (covering the station coordinates)
     h3_cells = [
-        "891e285818fffff",
-        "891e2858193ffff",
-        "891e2858197ffff",
-        "891e2858183ffff",
-        "891e285818bffff",
-        "891e28581a3ffff",
-        "891e28581a7ffff",
-        "891e28581abffff",
+        "891e037aacfffff",  # Deák Ferenc tér (47.4979, 19.0541)
+        "891e037aa63ffff",  # Kálvin tér (47.4893, 19.0617)
+        "891e037aa87ffff",  # Oktogon (47.5058, 19.0632)
+        "891e03781b7ffff",  # Fővám tér (47.4862, 19.0558)
+        "891e037aa3bffff",  # Blaha Lujza tér (47.4962, 19.0706)
+        "891e037aa0bffff",  # Astoria (47.4943, 19.0595)
+        "891e037ae63ffff",  # Kossuth Lajos tér / Parlament (47.5072, 19.0460)
+        "891e037aa4bffff",  # Ferenciek tere (47.4907, 19.0514)
     ]
     pop_data = [
         {"cell_id": h3_cells[0], "population": 420.0},
