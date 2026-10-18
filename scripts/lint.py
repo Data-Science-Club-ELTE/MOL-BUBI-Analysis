@@ -38,7 +38,9 @@ def lint_with_ast(root_dir: str) -> bool:
                     error_count += 1
 
     if error_count == 0:
-        print(f"All {checked_files} Python source files verified successfully with zero syntax errors.")
+        print(
+            f"All {checked_files} Python source files verified successfully with zero syntax errors."
+        )
         return True
     else:
         print(f"Linting failed with {error_count} error(s).", file=sys.stderr)
@@ -54,7 +56,9 @@ def main():
         sys.exit(0)
 
     # Fallback to pure-Python AST verification
-    success = lint_with_ast(os.path.join(root, "bubi")) and lint_with_ast(os.path.join(root, "tests"))
+    success = lint_with_ast(os.path.join(root, "bubi")) and lint_with_ast(
+        os.path.join(root, "tests")
+    )
     if not success:
         sys.exit(1)
     print("Lint checks passed.")

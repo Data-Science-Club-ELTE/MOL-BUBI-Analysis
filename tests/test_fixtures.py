@@ -19,18 +19,18 @@ from bubi.routing.graph import load_graph_from_edges
 
 
 class TestFixtureAcceptance(unittest.TestCase):
-    """End-to-end acceptance tests on tests/fixtures/sample_edges.parquet."""
+    """End-to-end acceptance tests on the prototype routing edge fixture."""
 
     @classmethod
     def setUpClass(cls):
         fixtures_dir = os.path.join(os.path.dirname(__file__), "fixtures")
-        cls.parquet_path = os.path.join(fixtures_dir, "sample_edges.parquet")
+        cls.parquet_path = os.path.join(fixtures_dir, "sample_routing_edges.parquet")
 
     def test_fixture_file_exists(self):
         """Fixture tests/fixtures/sample_edges.parquet must exist."""
         self.assertTrue(
             os.path.exists(self.parquet_path),
-            f"Expected fixture file at {self.parquet_path}",
+            f"Expected routing fixture file at {self.parquet_path}",
         )
 
     def test_fixture_conforms_to_edges_schema(self):

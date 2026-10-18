@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import struct
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Union
+from typing import Any, Dict, Iterator, List, Union
 
 # Parquet physical type constants
 PARQUET_TYPE_BOOLEAN = 0
@@ -68,6 +68,7 @@ class Table:
         """Convert to pandas DataFrame if pandas is installed."""
         try:
             import pandas as pd
+
             return pd.DataFrame(self._data)
         except ImportError:
             return self
@@ -279,7 +280,9 @@ class CompactProtocolReader:
                 self.skip(elem_type)
 
 
-def write_parquet(file_path: str, data: Union[Dict[str, List[Any]], List[Dict[str, Any]], Any]) -> None:
+def write_parquet(
+    file_path: str, data: Union[Dict[str, List[Any]], List[Dict[str, Any]], Any]
+) -> None:
     """Write table data to a Parquet file."""
     # Normalize input into column-dict
     if hasattr(data, "to_dict"):
@@ -344,12 +347,14 @@ def write_parquet(file_path: str, data: Union[Dict[str, List[Any]], List[Dict[st
                 raw.extend(b)
             page_data = bytes(raw)
 
-        schema_elements.append({
-            "type": ptype,
-            "repetition_type": FIELD_REP_REQUIRED,
-            "name": name,
-            "converted_type": ctype,
-        })
+        schema_elements.append(
+            {
+                "type": ptype,
+                "repetition_type": FIELD_REP_REQUIRED,
+                "name": name,
+                "converted_type": ctype,
+            }
+        )
 
         # PageHeader
         w = CompactProtocolWriter()
@@ -373,25 +378,29 @@ def write_parquet(file_path: str, data: Union[Dict[str, List[Any]], List[Dict[st
         total_size = len(page_header_bytes) + len(page_data)
         total_uncompressed += total_size
 
-        col_chunks.append({
-            "file_offset": data_page_offset,
-            "meta_data": {
-                "type": ptype,
-                "encodings": [0],
-                "path_in_schema": [name],
-                "codec": 0,
-                "num_values": num_rows,
-                "total_uncompressed_size": total_size,
-                "total_compressed_size": total_size,
-                "data_page_offset": data_page_offset,
-            },
-        })
+        col_chunks.append(
+            {
+                "file_offset": data_page_offset,
+                "meta_data": {
+                    "type": ptype,
+                    "encodings": [0],
+                    "path_in_schema": [name],
+                    "codec": 0,
+                    "num_values": num_rows,
+                    "total_uncompressed_size": total_size,
+                    "total_compressed_size": total_size,
+                    "data_page_offset": data_page_offset,
+                },
+            }
+        )
 
-    row_groups = [{
-        "columns": col_chunks,
-        "total_byte_size": total_uncompressed,
-        "num_rows": num_rows,
-    }]
+    row_groups = [
+        {
+            "columns": col_chunks,
+            "total_byte_size": total_uncompressed,
+            "num_rows": num_rows,
+        }
+    ]
 
     # FileMetaData
     w = CompactProtocolWriter()
@@ -450,8 +459,8 @@ def write_parquet(file_path: str, data: Union[Dict[str, List[Any]], List[Dict[st
         f.write(file_buf)
 
 
-def read_parquet(file_path: str) -> Table:
-    """Read a Parquet file and return a Table."""
+def _read_native_parquet(file_path: str) -> Table:
+    """Read the subset of Parquet supported by the lightweight native reader."""
     with open(file_path, "rb") as f:
         data = f.read()
 
@@ -465,7 +474,6 @@ def read_parquet(file_path: str) -> Table:
 
     schema = []
     row_groups = []
-    num_rows = 0
 
     while True:
         fid, ftype = r.read_field_header()
@@ -497,7 +505,7 @@ def read_parquet(file_path: str) -> Table:
                 r.struct_end()
                 schema.append(se)
         elif fid == 3:
-            num_rows = r.read_i64()
+            r.read_i64()
         elif fid == 4:  # row_groups
             rg_size, _ = r.read_list_header()
             for _ in range(rg_size):
@@ -527,7 +535,9 @@ def read_parquet(file_path: str) -> Table:
                                             meta["type"] = r.read_i32()
                                         elif mfid == 3:
                                             psize, _ = r.read_list_header()
-                                            meta["path_in_schema"] = [r.read_string() for _ in range(psize)]
+                                            meta["path_in_schema"] = [
+                                                r.read_string() for _ in range(psize)
+                                            ]
                                         elif mfid == 5:
                                             meta["num_values"] = r.read_i64()
                                         elif mfid == 6:
@@ -607,3 +617,18 @@ def read_parquet(file_path: str) -> Table:
                 result.setdefault(col_name, []).extend(res)
 
     return Table(result)
+
+
+def read_parquet(file_path: str) -> Table:
+    """Read a Parquet file and return a Table.
+
+    Use PyArrow when available to support standard Parquet encodings and binary
+    columns; fall back to the lightweight reader in minimal environments.
+    """
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        return _read_native_parquet(file_path)
+
+    arrow_table = pq.read_table(file_path)
+    return Table({column: arrow_table[column].to_pylist() for column in arrow_table.column_names})

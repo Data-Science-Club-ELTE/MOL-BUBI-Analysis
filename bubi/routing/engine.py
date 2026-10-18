@@ -10,7 +10,7 @@ Conforms to Technical Design Document (Section 6.4) and RoutesSchema contract (S
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from bubi.contracts.schemas import RoutesSchema
 from bubi.io.parquet import Table
@@ -111,12 +111,14 @@ class SyntheticRouteEngine:
                 # Unroutable pair handled gracefully without crashing
                 report.unroutable_pairs += 1
                 report.dropped_trips += trips
-                report.unroutable_details.append({
-                    "start_station_id": str(start_id),
-                    "end_station_id": str(end_id),
-                    "trip_count": trips,
-                    "reason": "no_path_found",
-                })
+                report.unroutable_details.append(
+                    {
+                        "start_station_id": str(start_id),
+                        "end_station_id": str(end_id),
+                        "trip_count": trips,
+                        "reason": "no_path_found",
+                    }
+                )
                 continue
 
             report.routed_pairs += 1
@@ -135,14 +137,16 @@ class SyntheticRouteEngine:
         # Format output conforming to RoutesSchema
         output_records: List[Dict[str, Any]] = []
         for (scen, start_id, end_id, r_type, edges_tuple), total_trips in merged_routes.items():
-            output_records.append({
-                "scenario": scen,
-                "start_station_id": start_id,
-                "end_station_id": end_id,
-                "route_type": r_type,
-                "edges": list(edges_tuple),
-                "trip_count": total_trips,
-            })
+            output_records.append(
+                {
+                    "scenario": scen,
+                    "start_station_id": start_id,
+                    "end_station_id": end_id,
+                    "route_type": r_type,
+                    "edges": list(edges_tuple),
+                    "trip_count": total_trips,
+                }
+            )
 
         if validate_schema and output_records:
             RoutesSchema.validate(output_records)
@@ -162,11 +166,13 @@ class SyntheticRouteEngine:
                 "trip_count": [r["trip_count"] for r in records],
             }
             return Table(cols)
-        return Table({
-            "scenario": [],
-            "start_station_id": [],
-            "end_station_id": [],
-            "route_type": [],
-            "edges": [],
-            "trip_count": [],
-        })
+        return Table(
+            {
+                "scenario": [],
+                "start_station_id": [],
+                "end_station_id": [],
+                "route_type": [],
+                "edges": [],
+                "trip_count": [],
+            }
+        )

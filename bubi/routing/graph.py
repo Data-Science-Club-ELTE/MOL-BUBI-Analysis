@@ -7,7 +7,7 @@ Conforms to Technical Design Document (Section 5 and 6.2):
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from bubi.contracts.schemas import EdgesSchema, _normalize_records
 from bubi.io.parquet import Table, read_parquet
@@ -91,6 +91,7 @@ class DiGraph:
         """Convert to a NetworkX MultiDiGraph if networkx is available."""
         try:
             import networkx as nx
+
             G = nx.MultiDiGraph()
             for node, attrs in self._nodes.items():
                 G.add_node(node, **attrs)
@@ -177,7 +178,7 @@ def load_graph_from_edges(
             "length_m": float(row["length_m"]),
             "grade": float(row.get("grade", 0.0)),
             "has_dedicated_lane": bool(row["has_dedicated_lane"]),
-            "geometry": str(row.get("geometry", "")),
+            "geometry": row.get("geometry", ""),
         }
         graph.add_edge(u, v, key=key, **edge_attrs)
 

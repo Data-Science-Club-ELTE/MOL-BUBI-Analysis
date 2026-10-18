@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import heapq
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional
 
 from bubi.routing.cost import compute_edge_weight
 from bubi.routing.graph import DiGraph

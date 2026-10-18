@@ -2,8 +2,7 @@
 
 import unittest
 
-from bubi.contracts.schemas import RoutesSchema
-from bubi.routing.engine import RouteReport, SyntheticRouteEngine
+from bubi.routing.engine import SyntheticRouteEngine
 from bubi.routing.graph import DiGraph
 
 

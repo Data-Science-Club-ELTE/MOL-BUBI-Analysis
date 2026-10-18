@@ -5,7 +5,7 @@ Conforms to Technical Design Document (Section 5) and task specifications.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Sequence, Union
+from typing import Any, Dict, List, Sequence
 
 
 class SchemaError(ValueError):
@@ -73,7 +73,7 @@ class EdgesSchema:
     - osm_way_id (int): OpenStreetMap way identifier
     - length_m (float): Physical length of edge in meters (must be >= 0)
     - has_dedicated_lane (bool): Whether a dedicated bike lane exists in this direction
-    - geometry (str): Geometry representation (e.g. LineString WKT or GeoJSON)
+    - geometry (str/bytes): Geometry representation (e.g. WKT, GeoJSON, or WKB)
 
     Graph routing extensions (optional in contract, required for graph building):
     - u (str/int): Source node
@@ -87,7 +87,7 @@ class EdgesSchema:
         "osm_way_id": (int,),
         "length_m": (int, float),
         "has_dedicated_lane": (bool,),
-        "geometry": (str,),
+        "geometry": (str, bytes),
     }
 
     OPTIONAL_FIELDS: Dict[str, type | tuple[type, ...]] = {
@@ -115,9 +115,7 @@ class EdgesSchema:
                     )
                 val = row[field]
                 if val is None:
-                    raise SchemaError(
-                        f"Row {idx} field '{field}' cannot be null."
-                    )
+                    raise SchemaError(f"Row {idx} field '{field}' cannot be null.")
                 # bool is subclass of int in Python, check bool explicitly
                 if bool in expected_types:
                     if not isinstance(val, bool):
@@ -199,9 +197,7 @@ class RoutesSchema:
                     )
                 val = row[field]
                 if val is None:
-                    raise SchemaError(
-                        f"Row {idx} field '{field}' cannot be null."
-                    )
+                    raise SchemaError(f"Row {idx} field '{field}' cannot be null.")
                 if isinstance(val, bool) or not isinstance(val, expected_types):
                     type_names = ", ".join(t.__name__ for t in expected_types)
                     raise SchemaError(

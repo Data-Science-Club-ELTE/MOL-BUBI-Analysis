@@ -8,7 +8,7 @@ Conforms to Technical Design Document (Section 6.4):
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Union
+from typing import Any, Optional, Union
 
 
 def _calculate_cost(length_m: float, grade: float, alpha: float) -> float:

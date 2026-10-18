@@ -2,7 +2,7 @@
 
 import unittest
 
-from bubi.routing.dijkstra import RouteResult, dijkstra_shortest_path
+from bubi.routing.dijkstra import dijkstra_shortest_path
 from bubi.routing.graph import DiGraph
 
 

@@ -15,7 +15,7 @@ from bubi.io.parquet import write_parquet
 
 def generate_fixtures() -> None:
     fixtures_dir = os.path.abspath(os.path.dirname(__file__))
-    parquet_path = os.path.join(fixtures_dir, "sample_edges.parquet")
+    parquet_path = os.path.join(fixtures_dir, "sample_routing_edges.parquet")
     json_path = os.path.join(fixtures_dir, "sample_edges.json")
 
     edges = [
