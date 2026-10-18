@@ -1,0 +1,207 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 960" width="1280" height="960" font-family="Helvetica, Arial, sans-serif">
+  <style>
+    .frame { fill: #ffffff; stroke: #555; stroke-width: 1.5; }
+    .box { fill: #f4f4f4; stroke: #888; stroke-width: 1; }
+    .box-dark { fill: #e6e6e6; stroke: #888; stroke-width: 1; }
+    .map { fill: #eef1ee; stroke: #888; stroke-width: 1; }
+    .ph { fill: none; stroke: #aaa; stroke-width: 1; stroke-dasharray: 5 4; }
+    .t { font-size: 13px; fill: #222; }
+    .ts { font-size: 11px; fill: #555; }
+    .th { font-size: 15px; font-weight: bold; fill: #111; }
+    .tl { font-size: 18px; font-weight: bold; fill: #111; }
+    .num { font-size: 12px; font-weight: bold; fill: #fff; }
+    .call { fill: #d9480f; }
+    .road { stroke: #b8b8b8; stroke-width: 3; fill: none; }
+    .lane { stroke: #2b8a3e; stroke-width: 4; fill: none; }
+    .gap { stroke: #d9480f; stroke-width: 6; fill: none; }
+  </style>
+
+  <!-- Window -->
+  <rect class="frame" x="10" y="10" width="1260" height="940" rx="6"/>
+
+  <!-- Header -->
+  <rect class="box-dark" x="10" y="10" width="1260" height="56" rx="6"/>
+  <text class="tl" x="26" y="44">MOL Bubi Bike-Lane &amp; Station Recommendation Tool</text>
+  <rect x="1010" y="24" width="240" height="28" rx="14" fill="#fff3bf" stroke="#c99a06"/>
+  <text class="t" x="1024" y="43">Synthetic demo data (D5) · fixtures</text>
+  <circle class="call" cx="1000" cy="38" r="10"/><text class="num" x="996" y="42">1</text>
+
+  <!-- Sidebar -->
+  <rect class="box" x="10" y="66" width="240" height="884"/>
+  <circle class="call" cx="232" cy="88" r="10"/><text class="num" x="228" y="92">2</text>
+  <text class="th" x="26" y="94">Scenario</text>
+  <circle cx="34" cy="116" r="6" fill="#222"/><text class="t" x="48" y="120">baseline</text>
+  <circle cx="34" cy="140" r="6" fill="none" stroke="#222"/><text class="t" x="48" y="144">lane_aware</text>
+  <circle cx="34" cy="164" r="6" fill="none" stroke="#222"/><text class="t" x="48" y="168">population_only</text>
+  <rect x="26" y="182" width="12" height="12" fill="none" stroke="#222"/>
+  <text class="t" x="46" y="193">Show difference vs baseline</text>
+
+  <line x1="26" y1="212" x2="234" y2="212" stroke="#ccc"/>
+  <circle class="call" cx="232" cy="234" r="10"/><text class="num" x="228" y="238">3</text>
+  <text class="th" x="26" y="240">Map layers</text>
+  <g class="t">
+    <rect x="26" y="254" width="12" height="12" fill="#222"/><text x="46" y="265">Existing stations</text>
+    <rect x="26" y="278" width="12" height="12" fill="#222"/><text x="46" y="289">Proposed stations</text>
+    <rect x="26" y="302" width="12" height="12" fill="none" stroke="#222"/><text x="46" y="313">Population (H3 cells)</text>
+    <rect x="26" y="326" width="12" height="12" fill="#222"/><text x="46" y="337">Bike-lane coverage</text>
+    <rect x="26" y="350" width="12" height="12" fill="none" stroke="#222"/><text x="46" y="361">Synthetic routes</text>
+    <rect x="26" y="374" width="12" height="12" fill="#222"/><text x="46" y="385">Top corridors</text>
+  </g>
+  <text class="ts" x="26" y="410">Top corridors to show</text>
+  <line x1="26" y1="424" x2="234" y2="424" stroke="#888" stroke-width="2"/>
+  <circle cx="110" cy="424" r="7" fill="#222"/>
+  <text class="ts" x="104" y="444">10</text>
+
+  <line x1="26" y1="462" x2="234" y2="462" stroke="#ccc"/>
+  <text class="th" x="26" y="488">Run parameters</text>
+  <text class="ts" x="26" y="510">Read-only, from config file</text>
+  <text class="t" x="26" y="532">Walk coverage: 350 m</text>
+  <text class="t" x="26" y="552">Proposed stations N: 10</text>
+  <text class="t" x="26" y="572">Min spacing: 400 m</text>
+  <text class="t" x="26" y="592">Seed: 42 · H3 res 9</text>
+  <text class="t" x="26" y="612">OSM graph: 2026w1</text>
+
+  <text class="ts" x="26" y="930">All numbers here are placeholders.</text>
+  <line x1="26" y1="632" x2="234" y2="632" stroke="#ccc"/>
+  <circle class="call" cx="232" cy="654" r="10"/><text class="num" x="228" y="658">4</text>
+  <text class="th" x="26" y="660">Exports</text>
+  <rect class="box-dark" x="26" y="674" width="200" height="28" rx="4"/><text class="t" x="40" y="693">Corridors (GeoJSON / CSV)</text>
+  <rect class="box-dark" x="26" y="710" width="200" height="28" rx="4"/><text class="t" x="40" y="729">Stations (GeoJSON / CSV)</text>
+
+  <!-- KPI row -->
+  <circle class="call" cx="1252" cy="86" r="10"/><text class="num" x="1248" y="90">5</text>
+  <g>
+    <rect class="box" x="266" y="80" width="236" height="66" rx="4"/>
+    <text class="ts" x="280" y="102">Stations (existing + proposed)</text><text class="tl" x="280" y="132">220 + 10</text>
+    <rect class="box" x="514" y="80" width="236" height="66" rx="4"/>
+    <text class="ts" x="528" y="102">Newly served population</text><text class="tl" x="528" y="132">+ 18 400</text>
+    <rect class="box" x="762" y="80" width="236" height="66" rx="4"/>
+    <text class="ts" x="776" y="102">Corridor km needed</text><text class="tl" x="776" y="132">12.4 km</text>
+    <rect class="box" x="1010" y="80" width="230" height="66" rx="4"/>
+    <text class="ts" x="1024" y="102">Synthetic trips</text><text class="tl" x="1024" y="132">48 000</text>
+  </g>
+
+  <!-- Map -->
+  <rect class="map" x="266" y="160" width="700" height="420" rx="4"/>
+  <circle class="call" cx="282" cy="178" r="10"/><text class="num" x="278" y="182">6</text>
+  <text class="th" x="300" y="184">Main map (Folium)</text>
+  <path class="road" d="M300 520 L480 380 L700 300 L940 230"/>
+  <path class="road" d="M360 260 L520 330 L640 470 L760 560"/>
+  <path class="road" d="M560 200 L600 330 L620 560"/>
+  <path class="lane" d="M300 520 L480 380"/>
+  <path class="lane" d="M560 200 L600 330"/>
+  <path class="gap" d="M480 380 L700 300"/>
+  <path class="gap" d="M520 330 L640 470"/>
+  <g fill="#1c7ed6" stroke="#fff" stroke-width="1.5">
+    <circle cx="480" cy="380" r="7"/><circle cx="600" cy="330" r="7"/><circle cx="700" cy="300" r="7"/><circle cx="360" cy="260" r="7"/>
+  </g>
+  <g fill="#2b8a3e" stroke="#fff" stroke-width="1.5">
+    <polygon points="820,440 834,448 834,464 820,472 806,464 806,448"/>
+    <polygon points="420,500 434,508 434,524 420,532 406,524 406,508"/>
+  </g>
+  <!-- legend -->
+  <rect x="280" y="470" width="0" height="0"/>
+  <rect fill="#fff" stroke="#999" x="800" y="176" width="150" height="112" rx="4"/>
+  <text class="ts" x="812" y="194" font-weight="bold">Legend</text>
+  <circle cx="818" cy="210" r="5" fill="#1c7ed6"/><text class="ts" x="830" y="214">Existing station</text>
+  <polygon points="818,222 824,226 824,232 818,236 812,232 812,226" fill="#2b8a3e"/><text class="ts" x="830" y="233">Proposed station</text>
+  <line x1="810" y1="250" x2="826" y2="250" class="lane"/><text class="ts" x="830" y="254">Has lane (direction)</text>
+  <line x1="810" y1="270" x2="826" y2="270" class="gap"/><text class="ts" x="830" y="274">Priority gap</text>
+  <!-- popup -->
+  <rect fill="#fff" stroke="#555" x="610" y="378" width="180" height="70" rx="4"/>
+  <text class="ts" x="620" y="396" font-weight="bold">Corridor #3 · rank 3</text>
+  <text class="ts" x="620" y="412">Direction: n1 → n3 (NE)</text>
+  <text class="ts" x="620" y="426">Volume 1 240 · no lane</text>
+  <text class="ts" x="620" y="440">Click for score breakdown</text>
+
+  <!-- Detail panel -->
+  <rect class="box" x="978" y="160" width="262" height="420" rx="4"/>
+  <circle class="call" cx="1224" cy="178" r="10"/><text class="num" x="1220" y="182">7</text>
+  <text class="th" x="992" y="184">Selected recommendation</text>
+  <text class="ts" x="992" y="206">Filled when a map item is clicked</text>
+  <g class="t">
+    <text x="992" y="236">Type: corridor</text>
+    <text x="992" y="258">Scenario: lane_aware</text>
+    <text x="992" y="280">Rank: 3 of 25</text>
+    <text x="992" y="302">Direction: n1 → n3</text>
+    <text x="992" y="324">Lane in this direction: no</text>
+    <text x="992" y="346">Route volume: 1 240</text>
+    <text x="992" y="368">Gap length: 720 m</text>
+    <text x="992" y="390">Continuity factor: 1.3</text>
+  </g>
+  <rect class="box-dark" x="992" y="406" width="234" height="44" rx="4"/>
+  <text class="ts" x="1002" y="424">Score = volume × gap length</text>
+  <text class="ts" x="1002" y="440">× continuity = 1 160 000</text>
+  <text class="t" x="992" y="476">Robustness: all 3 scenarios</text>
+  <rect x="992" y="488" width="96" height="22" rx="11" fill="#d3f9d8" stroke="#2b8a3e"/>
+  <text class="ts" x="1006" y="503">ROBUST</text>
+  <text class="ts" x="992" y="540">Station items show population,</text>
+  <text class="ts" x="992" y="554">lane connectivity and score instead.</text>
+
+  <!-- Scenario comparison -->
+  <rect class="ph" x="266" y="596" width="974" height="216" rx="4"/>
+  <circle class="call" cx="282" cy="614" r="10"/><text class="num" x="278" y="618">8</text>
+  <text class="th" x="300" y="620">Scenario comparison (filled in week 5)</text>
+  <g>
+    <rect class="box" x="282" y="636" width="300" height="160" rx="4"/>
+    <text class="t" x="296" y="656">baseline</text>
+    <rect class="map" x="296" y="666" width="272" height="116"/>
+    <rect class="box" x="594" y="636" width="300" height="160" rx="4"/>
+    <text class="t" x="608" y="656">lane_aware</text>
+    <rect class="map" x="608" y="666" width="272" height="116"/>
+    <rect class="box" x="906" y="636" width="318" height="160" rx="4"/>
+    <text class="t" x="920" y="656">Comparison metrics</text>
+    <g class="ts">
+      <text x="1066" y="680" font-weight="bold">base</text>
+      <text x="1118" y="680" font-weight="bold">lane</text>
+      <text x="1170" y="680" font-weight="bold">pop</text>
+      <text x="920" y="700">Total demand</text>
+      <text x="1066" y="700">100%</text>
+      <text x="1118" y="700">+6%</text>
+      <text x="1170" y="700">+11%</text>
+      <text x="920" y="720">Demand / new person</text>
+      <text x="1066" y="720">–</text>
+      <text x="1118" y="720">0.9</text>
+      <text x="1170" y="720">0.8</text>
+      <text x="920" y="740">New people / km</text>
+      <text x="1066" y="740">–</text>
+      <text x="1118" y="740">1.9k</text>
+      <text x="1170" y="740">1.1k</text>
+      <text x="920" y="764">Robust corridors: 7 · Station-dependent: 5</text>
+    </g>
+  </g>
+  <text class="ts" x="300" y="806">Third map (population_only) shown via the scenario selector or as a third small map on wide screens.</text>
+
+  <!-- Tabs -->
+  <circle class="call" cx="282" cy="842" r="10"/><text class="num" x="278" y="846">9</text>
+  <rect class="box-dark" x="300" y="826" width="150" height="30" rx="4"/><text class="t" x="320" y="846">Top corridors</text>
+  <rect class="box" x="456" y="826" width="170" height="30" rx="4"/><text class="t" x="476" y="846">Station candidates</text>
+  <rect class="box" x="632" y="826" width="230" height="30" rx="4"/><text class="t" x="652" y="846">Methodology &amp; limitations</text>
+  <rect class="box" x="266" y="856" width="974" height="80" rx="4"/>
+  <g class="ts">
+    <text x="282" y="878" font-weight="bold">rank</text>
+    <text x="332" y="878" font-weight="bold">corridor_id</text>
+    <text x="432" y="878" font-weight="bold">scenario</text>
+    <text x="532" y="878" font-weight="bold">direction</text>
+    <text x="622" y="878" font-weight="bold">volume</text>
+    <text x="702" y="878" font-weight="bold">gap length</text>
+    <text x="792" y="878" font-weight="bold">score</text>
+    <text x="882" y="878" font-weight="bold">robust?</text>
+    <text x="282" y="898">1</text>
+    <text x="332" y="898">c_014</text>
+    <text x="432" y="898">baseline</text>
+    <text x="532" y="898">N → S</text>
+    <text x="622" y="898">2 310</text>
+    <text x="702" y="898">1.2 km</text>
+    <text x="792" y="898">2.9 M</text>
+    <text x="882" y="898">yes</text>
+    <text x="282" y="918">2</text>
+    <text x="332" y="918">c_007</text>
+    <text x="432" y="918">baseline</text>
+    <text x="532" y="918">E → W</text>
+    <text x="622" y="918">1 980</text>
+    <text x="702" y="918">0.9 km</text>
+    <text x="792" y="918">2.1 M</text>
+    <text x="882" y="918">station-dependent</text>
+  </g>
+</svg>
