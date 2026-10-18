@@ -1,17 +1,27 @@
-.PHONY: all test lint format clean
+.PHONY: install test lint format fixtures dashboard run-pipeline clean
 
-PYTHON ?= python
+VENV = .venv
+PYTHON = $(VENV)/bin/python
+UV = uv
 
-all: lint test
+install:
+	$(UV) venv $(VENV)
+	$(UV) pip install -e ".[dev]"
+
+fixtures:
+	$(PYTHON) scripts/generate_fixtures.py
 
 test:
-	@$(PYTHON) -m unittest discover tests 2>/dev/null || py -m unittest discover tests
+	$(PYTHON) -m pytest tests/ -v
 
 lint:
-	@$(PYTHON) scripts/lint.py 2>/dev/null || py scripts/lint.py
+	$(PYTHON) -m ruff check .
 
 format:
-	@$(PYTHON) -m ruff format . 2>/dev/null || py -m ruff format . 2>/dev/null || true
+	$(PYTHON) -m ruff format .
+
+dashboard:
+	$(PYTHON) -m streamlit run src/bubi/dashboard/app.py
 
 clean:
-	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	rm -rf $(VENV) .pytest_cache .ruff_cache __pycache__ build dist *.egg-info

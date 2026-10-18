@@ -1,0 +1,52 @@
+# MOL Bubi Recommendation System Configuration
+
+project:
+  name: "mol-bubi-recommender"
+  version: "0.1.0"
+  random_seed: 42
+
+spatial:
+  crs_exchange: "EPSG:4326"
+  crs_analysis: "EPSG:23700"  # Hungarian National Grid (HD72 / EOV)
+  h3_resolution: 9
+  study_area_bbox: [18.92, 47.35, 19.33, 47.61] # [min_lon, min_lat, max_lon, max_lat] Budapest
+
+network:
+  frozen_graph_version: "budapest_osm_2026w1"
+  network_type: "bike"
+  walking_network_type: "walk"
+  elevation_dem_source: "copernicus_dem_30m"
+  uphill_penalty_alpha: 3.0
+
+demand:
+  population_source: "worldpop_2026_100m"
+  population_threshold_per_cell: 100
+  gravity_scaling_k: 0.05
+  gravity_distance_decay: "exponential"  # or power_law
+  gravity_beta: 0.0015
+
+station_scoring:
+  walk_coverage_threshold_m: 350.0
+  candidate_n: 10
+  min_spacing_m: 400.0
+
+scenarios:
+  active:
+    - "baseline"
+    - "lane_aware"
+    - "population_only"
+  baseline:
+    description: "Existing Futár stations only"
+    siting_rule: "none"
+  lane_aware:
+    description: "Existing + N proposed stations scored by population x lane connectivity"
+    siting_rule: "population_x_lane_connectivity"
+  population_only:
+    description: "Existing + N proposed stations scored by population only"
+    siting_rule: "population_only"
+
+paths:
+  data_raw_dir: "data/raw"
+  data_processed_dir: "data/processed"
+  fixtures_dir: "tests/fixtures"
+  exports_dir: "outputs/exports"
