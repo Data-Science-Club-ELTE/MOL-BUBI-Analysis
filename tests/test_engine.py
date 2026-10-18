@@ -2,8 +2,8 @@
 
 import unittest
 
-from bubi.routing.engine import SyntheticRouteEngine
-from bubi.routing.graph import DiGraph
+from bubi.prototype.routing.engine import SyntheticRouteEngine
+from bubi.prototype.routing.graph import DiGraph
 
 
 class TestSyntheticRouteEngine(unittest.TestCase):

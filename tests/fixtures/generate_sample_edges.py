@@ -7,10 +7,10 @@ import os
 import sys
 
 # Ensure root directory is in sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
 
-from bubi.contracts.schemas import EdgesSchema
-from bubi.io.parquet import write_parquet
+from bubi.prototype.contracts.schemas import EdgesSchema
+from bubi.prototype.io.parquet import write_parquet
 
 
 def generate_fixtures() -> None:

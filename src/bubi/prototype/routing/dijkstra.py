@@ -13,8 +13,8 @@ import heapq
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
-from bubi.routing.cost import compute_edge_weight
-from bubi.routing.graph import DiGraph
+from bubi.prototype.routing.cost import compute_edge_weight
+from bubi.prototype.routing.graph import DiGraph
 
 
 @dataclass

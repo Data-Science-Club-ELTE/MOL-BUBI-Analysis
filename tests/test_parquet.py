@@ -7,10 +7,10 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from bubi.contracts.schemas import EdgesSchema
-from bubi.io.parquet import read_parquet
-from bubi.routing.dijkstra import dijkstra_shortest_path
-from bubi.routing.graph import load_graph_from_edges
+from bubi.prototype.contracts.schemas import EdgesSchema
+from bubi.prototype.io.parquet import read_parquet
+from bubi.prototype.routing.dijkstra import dijkstra_shortest_path
+from bubi.prototype.routing.graph import load_graph_from_edges
 
 
 class TestParquetSamples(unittest.TestCase):

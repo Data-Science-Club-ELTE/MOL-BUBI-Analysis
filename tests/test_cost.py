@@ -2,7 +2,7 @@
 
 import unittest
 
-from bubi.routing.cost import compute_edge_weight
+from bubi.prototype.routing.cost import compute_edge_weight
 
 
 class TestComputeEdgeWeight(unittest.TestCase):

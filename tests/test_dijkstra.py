@@ -2,8 +2,8 @@
 
 import unittest
 
-from bubi.routing.dijkstra import dijkstra_shortest_path
-from bubi.routing.graph import DiGraph
+from bubi.prototype.routing.dijkstra import dijkstra_shortest_path
+from bubi.prototype.routing.graph import DiGraph
 
 
 class TestDijkstraRouting(unittest.TestCase):

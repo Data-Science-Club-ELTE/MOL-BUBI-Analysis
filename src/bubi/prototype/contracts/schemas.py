@@ -1,4 +1,4 @@
-"""Data contracts and schema validators for MOL Bubi.
+"""Prototype data contracts and schema validators for MOL Bubi.
 
 Conforms to Technical Design Document (Section 5) and task specifications.
 """

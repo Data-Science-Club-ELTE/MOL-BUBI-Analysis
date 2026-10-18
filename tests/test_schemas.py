@@ -2,7 +2,7 @@
 
 import unittest
 
-from bubi.contracts.schemas import EdgesSchema, RoutesSchema, SchemaError
+from bubi.prototype.contracts.schemas import EdgesSchema, RoutesSchema, SchemaError
 
 
 class TestSchemas(unittest.TestCase):

@@ -11,11 +11,11 @@ Acceptance Criteria:
 import os
 import unittest
 
-from bubi.contracts.schemas import EdgesSchema, RoutesSchema
-from bubi.io.parquet import read_parquet
-from bubi.routing.dijkstra import dijkstra_shortest_path
-from bubi.routing.engine import SyntheticRouteEngine
-from bubi.routing.graph import load_graph_from_edges
+from bubi.prototype.contracts.schemas import EdgesSchema, RoutesSchema
+from bubi.prototype.io.parquet import read_parquet
+from bubi.prototype.routing.dijkstra import dijkstra_shortest_path
+from bubi.prototype.routing.engine import SyntheticRouteEngine
+from bubi.prototype.routing.graph import load_graph_from_edges
 
 
 class TestFixtureAcceptance(unittest.TestCase):
@@ -27,7 +27,7 @@ class TestFixtureAcceptance(unittest.TestCase):
         cls.parquet_path = os.path.join(fixtures_dir, "sample_routing_edges.parquet")
 
     def test_fixture_file_exists(self):
-        """Fixture tests/fixtures/sample_edges.parquet must exist."""
+        """Prototype routing fixture must exist."""
         self.assertTrue(
             os.path.exists(self.parquet_path),
             f"Expected routing fixture file at {self.parquet_path}",

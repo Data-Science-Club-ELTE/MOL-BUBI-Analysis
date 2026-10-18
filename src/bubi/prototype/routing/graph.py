@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from bubi.contracts.schemas import EdgesSchema, _normalize_records
-from bubi.io.parquet import Table, read_parquet
+from bubi.prototype.contracts.schemas import EdgesSchema, _normalize_records
+from bubi.prototype.io.parquet import Table, read_parquet
 
 
 class DiGraph:

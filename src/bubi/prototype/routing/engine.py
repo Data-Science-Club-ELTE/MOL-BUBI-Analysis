@@ -12,10 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from bubi.contracts.schemas import RoutesSchema
-from bubi.io.parquet import Table
-from bubi.routing.dijkstra import RouteResult, dijkstra_shortest_path
-from bubi.routing.graph import DiGraph
+from bubi.prototype.contracts.schemas import RoutesSchema
+from bubi.prototype.io.parquet import Table
+from bubi.prototype.routing.dijkstra import RouteResult, dijkstra_shortest_path
+from bubi.prototype.routing.graph import DiGraph
 
 
 @dataclass

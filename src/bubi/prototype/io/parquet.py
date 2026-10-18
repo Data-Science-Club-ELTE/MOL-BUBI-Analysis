@@ -1,7 +1,6 @@
-"""Parquet I/O with native pure-Python support and optional pandas/pyarrow integration.
+"""Prototype Parquet I/O with native and optional PyArrow support.
 
-Ensures fixtures and datasets can be read and written in lightweight environments
-while maintaining strict compatibility with Apache Parquet format.
+Supports reading fixtures and datasets in lightweight environments.
 """
 
 from __future__ import annotations

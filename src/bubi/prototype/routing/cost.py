@@ -1,4 +1,4 @@
-"""Edge weight calculation with slope penalty for synthetic bike routing.
+"""Prototype edge weights with slope penalty for synthetic bike routing.
 
 Conforms to Technical Design Document (Section 6.4):
 - Edge cost = length plus an uphill penalty: cost = length * (1 + alpha * max(0, grade))

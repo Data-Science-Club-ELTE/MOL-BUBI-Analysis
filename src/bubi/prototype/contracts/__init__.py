@@ -1,5 +1,5 @@
 """Data contract definitions and schemas for MOL Bubi project."""
 
-from bubi.contracts.schemas import EdgesSchema, RoutesSchema, SchemaError
+from bubi.prototype.contracts.schemas import EdgesSchema, RoutesSchema, SchemaError
 
 __all__ = ["EdgesSchema", "RoutesSchema", "SchemaError"]

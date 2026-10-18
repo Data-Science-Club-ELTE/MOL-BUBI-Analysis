@@ -56,7 +56,7 @@ def main():
         sys.exit(0)
 
     # Fallback to pure-Python AST verification
-    success = lint_with_ast(os.path.join(root, "bubi")) and lint_with_ast(
+    success = lint_with_ast(os.path.join(root, "src", "bubi")) and lint_with_ast(
         os.path.join(root, "tests")
     )
     if not success:
