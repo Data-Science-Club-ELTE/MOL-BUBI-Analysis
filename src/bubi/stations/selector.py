@@ -63,7 +63,9 @@ def _lane_edges_projected(gdf_edges: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     g = g.to_crs("EPSG:23700")
     # a lane in either direction counts for connectivity; drop the reverse duplicate
     ends = g.geometry.apply(
-        lambda ln: tuple(sorted([tuple(np.round(ln.coords[0], 1)), tuple(np.round(ln.coords[-1], 1))]))
+        lambda ln: tuple(
+            sorted([tuple(np.round(ln.coords[0], 1)), tuple(np.round(ln.coords[-1], 1))])
+        )
     )
     g["_key"] = list(zip(g["osm_way_id"], ends))
     return g.drop_duplicates("_key").reset_index(drop=True)
