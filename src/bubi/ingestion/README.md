@@ -52,3 +52,19 @@ You do not need other members' work. Your upstream is the BKK Futár API (or a c
 - [ ] Output table strictly validated by `StationsSchema`.
 - [ ] Snapshot saved to `data/processed/stations.parquet`.
 - [ ] Unit test written under `tests/test_ingestion.py`.
+
+---
+
+## 5. Week 1: Raw Futár snapshot (Issue #5)
+
+`src/bubi/ingestion/futar_snapshot.py` fetches the `bicycle-rental` response and stores it **unchanged** under `data/raw/` (git-ignored; share it with the team outside git).
+Next to it a `*.meta.json` records the retrieval time, endpoint (without key), HTTP status, station count and SHA-256.
+
+```bash
+cp .env.example .env     # put your BKK Futár key into .env (never commit it)
+python -m bubi.ingestion.futar_snapshot
+pytest tests/test_ingestion.py
+```
+
+Station count = `len(response["data"]["list"])`. Acquisition notes: `docs/ingestion_notes.md`.
+The normalization into `StationsSchema` (`data/processed/stations.parquet`) is a later step, once the real response structure is known.
