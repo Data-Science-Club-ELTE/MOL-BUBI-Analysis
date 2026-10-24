@@ -16,6 +16,7 @@ test:
 
 lint:
 	$(PYTHON) -m ruff check .
+	$(PYTHON) -m ruff format --check .
 
 format:
 	$(PYTHON) -m ruff format .
