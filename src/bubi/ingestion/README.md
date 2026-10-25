@@ -68,3 +68,17 @@ pytest tests/test_ingestion.py
 
 Station count = `len(response["data"]["list"])`. Acquisition notes: `docs/ingestion_notes.md`.
 The normalization into `StationsSchema` (`data/processed/stations.parquet`) is a later step, once the real response structure is known.
+
+## 6. Processed stations table
+
+`src/bubi/ingestion/stations_table.py` converts a raw snapshot into the contract table `data/processed/stations.parquet` (`StationsSchema`: `station_id`, `name`, `lat`, `lon`).
+
+The raw response contains fixed stations and free-floating bikes. Stations are selected in two independent ways and the table is only written if both give exactly the same records:
+
+1. `type == "virtual"`
+2. style icon is not `vehicle-rental/mol-bubi-floating`
+
+```bash
+python -m bubi.ingestion.stations_table data/raw/futar_bicycle_rental_<stamp>.json
+pytest tests/test_stations_table.py
+```

@@ -41,12 +41,19 @@ A second request about 4.5 hours later (21:08 UTC, 962 records) was compared wit
 - `virtual`: 704 records in both snapshots. They have real street names, small `spaces` values and a varying `bikes` count. They look like fixed stations.
 - `bike` / `ebike`: 144 / 77 in the first and 170 / 88 in the second snapshot. 76 ids appear only in the second and 39 only in the first. They have `bikes = 1`, `spaces = 999`, `code = "BIKE"`, an icon named `mol-bubi-floating` and (almost always) `name` equal to the `id`. They look like individual free-floating bikes, not stations.
 - Interpretation (not confirmed by BKK documentation): `virtual` = fixed stations; `bike`/`ebike` = single bikes.
-- Open question for the team: the later `StationsSchema` table should probably contain only `type = "virtual"` records (704). To be decided before the normalization step.
+- Checked by the project maintainer (oguzzkd): the `virtual` records are the real stations; the `bike`/`ebike` records have no station code, and no stations were found at the coordinates he checked. The processed table therefore contains only `virtual` records (section 8).
 
 ## 7. Sharing the raw file
 - `data/raw/` is git-ignored, so the snapshot is NOT in the repo.
-- The first raw file was sent directly to the project maintainer (oguzzkd) in chat on 2026-10-18. A shared upload location for the team has not been decided yet.
+- Both raw snapshots and their `.meta.json` files are uploaded to the shared team Google Drive folder `MOL-BUBI_DSC/raw_futar_bicycle_rental` (the folder was created by the project maintainer for files outside GitHub).
 
-## 8. Security check
+## 8. Processed stations table
+- Code: `src/bubi/ingestion/stations_table.py` (run with `python -m bubi.ingestion.stations_table <raw file>`).
+- Input: the first raw snapshot, `futar_bicycle_rental_20261018T163442Z.json` (925 records).
+- Stations are selected in two independent ways: `type == "virtual"` (704 records) and "style icon is not `vehicle-rental/mol-bubi-floating`" (704 records). Both selections return exactly the same records, so the table was written.
+- Output: `data/processed/stations.parquet`, 704 rows, columns `station_id`, `name`, `lat`, `lon` (`StationsSchema`). `station_id` is the Futar `id` as a string; rows are sorted by `station_id`.
+- Not decided yet: which snapshot becomes the frozen station snapshot in the project config (the design document asks for a station snapshot date there).
+
+## 9. Security check
 - [x] `.env` is ignored by git (checked with `git check-ignore -v .env`)
 - [x] The key value does not appear in any repository file (checked by searching the project for it before committing)
