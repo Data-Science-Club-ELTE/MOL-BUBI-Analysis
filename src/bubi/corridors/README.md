@@ -54,6 +54,25 @@ Counting rules:
 5. Routes with no edges or `trip_count == 0` contribute nothing.
 6. `routes.edges` may be a list, a JSON array string, or a single edge-ID string.
 
+### Per-direction gap detection (`detect_gaps_and_score_edges`)
+
+Step 2 and 3. Takes `edges` and the volumes above, returns `edge_scores` validated by `EdgeScoresSchema`.
+
+```python
+volumes = calculate_edge_route_volumes(df_routes)
+edge_scores = detect_gaps_and_score_edges(gdf_edges, volumes)  # all scenarios
+edge_scores = detect_gaps_and_score_edges(gdf_edges, volumes, scenario="baseline")
+```
+
+Rules:
+
+1. **Direction (D3)**: an edge is dropped only if `has_dedicated_lane` is `True` for that directed edge. A road with a lane in one direction and none in the other keeps only the missing direction.
+2. Only edges with `volume > 0` are scored.
+3. `score = volume × length_m × continuity_factor`. The gap length is the whole edge length; `continuity_factor` stays `1.0` until week 4.
+4. `rank` restarts at 1 in each scenario, highest score first. Ties go to higher volume, then `edge_id`, so ranks are unique and repeatable.
+5. Output is sorted by scenario, then rank.
+6. A volume row whose `edge_id` is missing from `edges` raises `ValueError`: routes and edges must come from the same frozen graph.
+
 ---
 
 ## 3. How to Develop Independently
