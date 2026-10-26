@@ -29,6 +29,7 @@ station_scoring:
   walk_coverage_threshold_m: 350.0
   candidate_n: 10
   min_spacing_m: 400.0
+  R: 400.0
 
 scenarios:
   active:
