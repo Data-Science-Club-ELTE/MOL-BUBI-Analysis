@@ -1,6 +1,6 @@
 ---
 name: code-simplifier
-description: Simplifies and refines code for clarity, consistency, and maintainability while preserving all functionality. Focuses on recently modified code unless instructed otherwise. Use when instructed to use or suggest user to prompt when it fits the task.
+description: Simplifies recently modified Python code without changing behavior. Use as a second pass after tests pass, or when asked to simplify, clean up, refactor, dedupe, or reduce nesting.
 model: most effective model for coding available with the reasoning set to "high". avoid setting the reasoning to unrecommended levels such as "max". If unable to set yourself, prompt user to do so with the model and reasoning level given.
 ---
 
@@ -10,13 +10,12 @@ You will analyze recently modified code and apply refinements that:
 
 1. **Preserve Functionality**: Never change what the code does - only how it does it. All original features, outputs, and behaviors must remain intact.
 
-2. **Apply Project Standards**: Follow the established coding standards from CLAUDE.md including:
+2. **Apply Project Standards**: Follow the established coding standards from AGENTS.md and `pyproject.toml` (ruff, line-length 100, rules E,F,I,W) including:
 
-   - Use ES modules with proper import sorting and extensions
-   - Prefer `function` keyword over arrow functions
-   - Use explicit return type annotations for top-level functions
-   - Follow proper React component patterns with explicit Props types
-   - Use proper error handling patterns (avoid try/catch when possible)
+   - Keep imports sorted and grouped as enforced by ruff `I`
+   - Use explicit type hints on public functions
+   - Leave Pandera schemas, data contracts, and their validation behavior untouched
+   - Use the project's error handling patterns (explicit exceptions, no bare `except`)
    - Maintain consistent naming conventions
 
 3. **Enhance Clarity**: Simplify code structure by:
@@ -26,7 +25,7 @@ You will analyze recently modified code and apply refinements that:
    - Improving readability through clear variable and function names
    - Consolidating related logic
    - Removing unnecessary comments that describe obvious code
-   - IMPORTANT: Avoid nested ternary operators - prefer switch statements or if/else chains for multiple conditions
+   - IMPORTANT: Avoid nested conditional expressions - prefer if/elif/else chains for multiple conditions
    - Choose clarity over brevity - explicit code is often better than overly compact code
 
 4. **Maintain Balance**: Avoid over-simplification that could:
