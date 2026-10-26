@@ -1,9 +1,15 @@
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
+import yaml
 
+from bubi.contracts.schemas import StationsSchema
 from bubi.ingestion import futar_snapshot as fs
+from bubi.ingestion import ingest_futar_stations
+
+SAMPLE_RESPONSE = Path(__file__).parent / "fixtures" / "futar_bicycle_rental_sample.json"
 
 GOOD = {
     "version": 2,
@@ -66,3 +72,77 @@ def test_run_with_mocked_http(tmp_path, monkeypatch):
 def test_run_reports_http_error(tmp_path, monkeypatch):
     monkeypatch.setattr(fs, "http_get", lambda url, timeout=30: (401, b'{"text":"invalid key"}'))
     assert fs.run(tmp_path, api_key="bad") == 1
+
+
+def test_ingest_from_saved_response_keeps_only_stations():
+    df = ingest_futar_stations(raw_path=SAMPLE_RESPONSE)
+
+    StationsSchema.validate(df)
+    assert list(df.columns) == ["station_id", "name", "lat", "lon"]
+    assert list(df["station_id"]) == ["0101", "0102", "0103"]  # floating bikes dropped
+    assert df.loc[0, "name"] == "Synthetic Station A"
+    assert (df.loc[0, "lat"], df.loc[0, "lon"]) == (47.4979, 19.0402)
+
+
+def test_ingest_rejects_disagreeing_selection_rules(tmp_path):
+    payload = json.loads(SAMPLE_RESPONSE.read_text(encoding="utf-8"))
+    payload["data"]["list"][0]["style"]["icon"]["name"] = "vehicle-rental/mol-bubi-floating"
+    raw = tmp_path / "disagree.json"
+    raw.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(fs.IngestionError, match="disagree"):
+        ingest_futar_stations(raw_path=raw)
+
+
+def test_ingest_fetches_saves_raw_and_never_leaks_key(tmp_path, monkeypatch, capsys):
+    body = SAMPLE_RESPONSE.read_bytes()
+    monkeypatch.setattr(fs, "http_get", lambda url, timeout=30: (200, body))
+
+    df = ingest_futar_stations(api_key="SECRET123", out_dir=tmp_path)
+
+    assert len(df) == 3
+    raw = [p for p in tmp_path.glob("*.json") if ".meta." not in p.name]
+    assert len(raw) == 1 and raw[0].read_bytes() == body
+    for path in tmp_path.iterdir():
+        assert "SECRET123" not in path.read_text(encoding="utf-8")
+    out = capsys.readouterr()
+    assert "SECRET123" not in out.out + out.err
+
+
+def test_ingest_reads_key_from_environment(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_get(url, timeout=30):
+        seen["url"] = url
+        return 200, SAMPLE_RESPONSE.read_bytes()
+
+    monkeypatch.setenv(fs.ENV_KEY_NAME, "ENVKEY")
+    monkeypatch.setattr(fs, "http_get", fake_get)
+    ingest_futar_stations(out_dir=tmp_path)
+    assert "key=ENVKEY" in seen["url"]
+
+
+def test_ingest_without_key_fails_before_request(tmp_path, monkeypatch):
+    monkeypatch.delenv(fs.ENV_KEY_NAME, raising=False)
+    monkeypatch.setattr(fs, "load_api_key", lambda: None)
+    monkeypatch.setattr(fs, "http_get", lambda *a, **k: pytest.fail("must not call the API"))
+
+    with pytest.raises(fs.IngestionError, match=fs.ENV_KEY_NAME):
+        ingest_futar_stations(out_dir=tmp_path)
+
+
+def test_ingest_http_error_keeps_raw_and_hides_key(tmp_path, monkeypatch):
+    monkeypatch.setattr(fs, "http_get", lambda url, timeout=30: (401, b'{"text":"invalid key"}'))
+
+    with pytest.raises(fs.IngestionError, match="HTTP 401") as exc:
+        ingest_futar_stations(api_key="SECRET123", out_dir=tmp_path)
+    assert "SECRET123" not in str(exc.value)
+    assert len(list(tmp_path.glob("*.json"))) == 2  # raw + meta still written
+
+
+def test_frozen_snapshot_is_recorded_in_config():
+    config_path = Path(__file__).parents[1] / "config" / "default_config.yaml"
+    stations = yaml.safe_load(config_path.read_text(encoding="utf-8"))["stations"]
+    assert stations["snapshot_date"] == "2026-10-18"
+    assert stations["snapshot_file"].startswith("futar_bicycle_rental_20261018T")
+    assert len(stations["snapshot_sha256"]) == 64

@@ -1,0 +1,95 @@
+{
+  "version": 2,
+  "status": "OK",
+  "code": 200,
+  "text": "OK",
+  "currentTime": 1792341282759,
+  "data": {
+    "class": "listResponse",
+    "limitExceeded": false,
+    "outOfRange": false,
+    "references": {},
+    "list": [
+      {
+        "id": "0101",
+        "lat": 47.4979,
+        "lon": 19.0402,
+        "objectType": "station",
+        "name": "Synthetic Station A",
+        "code": "0101",
+        "type": "virtual",
+        "bikes": 3,
+        "spaces": 12,
+        "style": {
+          "icon": {
+            "name": "vehicle-rental/mol-bubi"
+          }
+        }
+      },
+      {
+        "id": "0102",
+        "lat": 47.507,
+        "lon": 19.0458,
+        "objectType": "station",
+        "name": "Synthetic Station B",
+        "code": "0102",
+        "type": "virtual",
+        "bikes": 3,
+        "spaces": 12,
+        "style": {
+          "icon": {
+            "name": "vehicle-rental/mol-bubi-empty"
+          }
+        }
+      },
+      {
+        "id": "0103",
+        "lat": 47.4925,
+        "lon": 19.0602,
+        "objectType": "station",
+        "name": "Synthetic Station C",
+        "code": "0103",
+        "type": "virtual",
+        "bikes": 3,
+        "spaces": 12,
+        "style": {
+          "icon": {
+            "name": "vehicle-rental/mol-bubi"
+          }
+        }
+      },
+      {
+        "id": "80001",
+        "lat": 47.49,
+        "lon": 19.07,
+        "objectType": "station",
+        "name": "80001",
+        "code": "BIKE",
+        "type": "bike",
+        "bikes": 1,
+        "spaces": 999,
+        "style": {
+          "icon": {
+            "name": "vehicle-rental/mol-bubi-floating"
+          }
+        }
+      },
+      {
+        "id": "80002",
+        "lat": 47.49,
+        "lon": 19.07,
+        "objectType": "station",
+        "name": "80002",
+        "code": "BIKE",
+        "type": "ebike",
+        "bikes": 1,
+        "spaces": 999,
+        "style": {
+          "icon": {
+            "name": "vehicle-rental/mol-bubi-floating"
+          }
+        }
+      }
+    ]
+  }
+}

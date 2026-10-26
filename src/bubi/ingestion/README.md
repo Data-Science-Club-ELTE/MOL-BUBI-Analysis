@@ -30,7 +30,7 @@ Parquet file saved to `data/processed/stations.parquet` (tested against `tests/f
 
 You do not need other members' work. Your upstream is the BKK Futár API (or a cached JSON response).
 
-1. Review and implement `src/bubi/ingestion/futar.py`.
+1. Review `src/bubi/ingestion/futar.py`.
 2. Test your implementation against mock data:
    ```python
    from bubi.contracts.schemas import StationsSchema
@@ -48,10 +48,11 @@ You do not need other members' work. Your upstream is the BKK Futár API (or a c
 ---
 
 ## 4. Definition of Done
-- [ ] BKK Futár endpoint queried and station list extracted.
-- [ ] Output table strictly validated by `StationsSchema`.
-- [ ] Snapshot saved to `data/processed/stations.parquet`.
-- [ ] Unit test written under `tests/test_ingestion.py`.
+- [x] BKK Futár endpoint queried and station list extracted.
+- [x] Output table strictly validated by `StationsSchema`.
+- [x] Snapshot saved to `data/processed/stations.parquet`.
+- [x] Unit test written under `tests/test_ingestion.py`.
+- [x] Frozen snapshot date recorded in `config/default_config.yaml` (`stations.snapshot_date`).
 
 ---
 
@@ -82,3 +83,23 @@ The raw response contains fixed stations and free-floating bikes. Stations are s
 python -m bubi.ingestion.stations_table data/raw/futar_bicycle_rental_<stamp>.json
 pytest tests/test_stations_table.py
 ```
+
+## 7. Python interface and frozen snapshot (Issue #19)
+
+`ingest_futar_stations` returns the stations table as a DataFrame validated by `StationsSchema`. It does not write the Parquet file; `stations_table.py` does that.
+
+```python
+from pathlib import Path
+
+from bubi.ingestion import ingest_futar_stations
+
+# Offline, from a saved raw response:
+df = ingest_futar_stations(raw_path=Path("data/raw/futar_bicycle_rental_20261018T163442Z.json"))
+
+# Online: reads BKK_FUTAR_API_KEY, saves the raw response under data/raw/ first.
+df = ingest_futar_stations()
+```
+
+It raises `IngestionError` when no API key is found, the response is not HTTP 200, or the two selection rules disagree. On a failed request the raw body and `*.meta.json` are still saved, without the key.
+
+The frozen snapshot is recorded under `stations` in `config/default_config.yaml`: `snapshot_date: "2026-10-18"`, the raw file name and its SHA-256. Offline tests use the synthetic response `tests/fixtures/futar_bicycle_rental_sample.json`.

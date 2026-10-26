@@ -52,7 +52,9 @@ A second request about 4.5 hours later (21:08 UTC, 962 records) was compared wit
 - Input: the first raw snapshot, `futar_bicycle_rental_20261018T163442Z.json` (925 records).
 - Stations are selected in two independent ways: `type == "virtual"` (704 records) and "style icon is not `vehicle-rental/mol-bubi-floating`" (704 records). Both selections return exactly the same records, so the table was written.
 - Output: `data/processed/stations.parquet`, 704 rows, columns `station_id`, `name`, `lat`, `lon` (`StationsSchema`). `station_id` is the Futar `id` as a string; rows are sorted by `station_id`.
-- Not decided yet: which snapshot becomes the frozen station snapshot in the project config (the design document asks for a station snapshot date there).
+- Frozen snapshot (issue #19): the first snapshot, `futar_bicycle_rental_20261018T163442Z.json`. It is recorded under `stations` in `config/default_config.yaml` (`snapshot_date: "2026-10-18"`, file name and SHA-256).
+- Why the first one: the processed table already came from it. The second snapshot (21:08 UTC) has the same 704 `virtual` records with identical `id`, `name`, `lat` and `lon`, so the choice does not change the table.
+- `ingest_futar_stations(raw_path=...)` in `src/bubi/ingestion/futar.py` applies the same two selection rules and returns the table without writing it. Run on the frozen snapshot, it returns a table equal to the committed `data/processed/stations.parquet` (704 rows).
 
 ## 9. Security check
 - [x] `.env` is ignored by git (checked with `git check-ignore -v .env`)

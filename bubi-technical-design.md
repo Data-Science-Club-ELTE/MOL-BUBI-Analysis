@@ -111,6 +111,7 @@ flowchart LR
 | --- | --- | --- |
 | Contract schemas and I/O | `contracts/schemas.py`, `contracts/io.py` | Implemented; 8 schemas (7 tables + trip-matrix interface) |
 | Futár raw snapshot | `ingestion/futar_snapshot.py` | Implemented |
+| Station ingestion interface | `ingestion/futar.py` (`ingest_futar_stations`) | Implemented; frozen snapshot date in config |
 | Processed station table | `ingestion/stations_table.py` | Implemented; produces `data/processed/stations.parquet` with 704 rows |
 | Synthetic demand (gravity) | `demand/gravity.py` | Implemented |
 | Station filtering, connectivity, selection | `stations/selector.py` | Implemented |
@@ -203,7 +204,7 @@ Two caveats, both important for reproducibility: no code reads this file yet (de
 
 `trips` and `gps_points` are not in the contract for now. When real data arrives, a conversion step writes `routes` rows with `route_type = observed`, and nothing downstream changes. Timestamp rules (store UTC, convert to Europe/Budapest for time-of-day binning) are defined then. The implemented volume step already aggregates synthetic and observed routes of one scenario together; filter `route_type` first if only one source is wanted.
 
-**Items the contract must still fix:** the real-data acceptance deadline (proposed: end of week 4, so it can feed week 5 scenario runs); the frozen station snapshot date; BKK licensing and attribution terms for the station data, including whether raw snapshots may be redistributed; the OSM extract date and frozen graph artifact; the canonical representation of `edges`/`edge_ids`; and composite-key uniqueness. §14 tracks these.
+**Items the contract must still fix:** the real-data acceptance deadline (proposed: end of week 4, so it can feed week 5 scenario runs); BKK licensing and attribution terms for the station data, including whether raw snapshots may be redistributed; the OSM extract date and frozen graph artifact; the canonical representation of `edges`/`edge_ids`; and composite-key uniqueness. §14 tracks these.
 
 ---
 
@@ -216,6 +217,8 @@ Each module is developed against the frozen contract and committed fixtures, so 
 `ingestion/futar_snapshot.py` fetches the BKK Futár `bicycle-rental` endpoint, saves the response byte-for-byte under `data/raw/` (git-ignored), and writes a `*.meta.json` sidecar with retrieval time, endpoint without the API key, HTTP status, byte count, SHA-256, station count, counting method, and an inspection report. It refuses to overwrite an existing snapshot. The API key is read from `BKK_FUTAR_API_KEY` or a local `.env` file and is never written to disk.
 
 `ingestion/stations_table.py` converts a raw snapshot into `data/processed/stations.parquet`. The raw response mixes fixed stations with free-floating bikes. The script selects fixed stations in two independent ways and writes the table only when both selections agree: `type == "virtual"`, and style icon not equal to `vehicle-rental/mol-bubi-floating`. The 18 October 2026 snapshot produced 704 stations: `station_id`, `name`, `lat`, `lon`, sorted by `station_id`.
+
+`ingestion/futar.py` exposes `ingest_futar_stations`, which returns the same table as a DataFrame without writing it. Given `raw_path` it works offline; otherwise it reads the API key, saves the raw response under `data/raw/` first, and then converts it. It raises `IngestionError` if the key is missing, the response is not HTTP 200, or the two selection rules disagree. The frozen snapshot is recorded under `stations` in `config/default_config.yaml`: date `2026-10-18`, file `futar_bicycle_rental_20261018T163442Z.json`, and its SHA-256 digest.
 
 Documented commands:
 
@@ -508,7 +511,7 @@ Things that could go wrong during the project, with how each is handled.
 | --- | --- |
 | Real trip/GPS data may be unavailable or late | Fully synthetic trips and routes by design; contract deadline for real data; outputs clearly labelled |
 | The Futár API provides no historical trip data (only a live station list) | Stations come from Futár; trips are generated; real data is plugged in if obtained from another source |
-| Futár snapshot contents change between requests | Treat each snapshot as immutable, record retrieval metadata, and freeze one snapshot date in config; the processed table currently derives from the 18 October 2026 snapshot |
+| Futár snapshot contents change between requests | Treat each snapshot as immutable, record retrieval metadata, and freeze one snapshot in config; `stations.snapshot_date` is `2026-10-18` |
 | BKK licensing and redistribution terms are unresolved | Record the open status in the source inventory; keep raw snapshots out of git; review the committed processed station table against the terms before a public release |
 | Straight-line distance stands in for walking and network distance | Labelled as a lower bound (D15); replace with walking-graph and routed distance when §6.2 and §6.4 land; avoid claiming precise walking coverage |
 | Network, population, routing, and gap-scoring modules are missing, so no end-to-end pipeline exists | Modules are isolated behind the frozen contract and fixtures; module-level tests; §3.1 makes the gap explicit rather than implying a working pipeline |
@@ -544,7 +547,6 @@ Built-in boundaries of what the results can claim; each is documented in the met
 ### 14.1 Data, access, and licensing
 
 - Ratify the real-data acceptance deadline (proposed: end of week 4) and record what happens if no data arrives.
-- Freeze the Futár station snapshot date in config; the processed table currently comes from the 18 October 2026 snapshot, and later snapshots differ in composition.
 - Resolve BKK Futár licensing, attribution, and raw-snapshot redistribution terms (`docs/source_inventory.md` marks them unresolved).
 - Record the OSM extract date and store or document the frozen graph artifact behind the `budapest_osm_2026w1` label.
 - Confirm the exact DEM product and version behind `copernicus_dem_30m`.
