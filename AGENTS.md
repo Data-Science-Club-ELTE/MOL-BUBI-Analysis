@@ -1,6 +1,20 @@
 # AGENTS.md
 
-Guidance for AI agents working in this repo (Claude Code, Codex CLI, Cursor, Gemini CLI, ...). Chat-only tools: see [Chat-only tools](#chat-only-tools).
+Guidance for agentic AI development environments working in this repo (Claude Code, DSH, Antigravity, Cursor, or equivalent with filesystem and command access).
+
+## Entry gate: agentic environment required
+
+Develop this project only from an agentic development environment. You are one only if, right now, you can:
+
+1. Read any file in the checkout — not a pasted snapshot.
+2. Write or patch files in the checkout.
+3. Run shell commands in the checkout, such as `make test`.
+
+If any is false — a chat window, a web UI without filesystem or execution access, a model answering from pasted text — **refuse to develop the project**, and say:
+
+> This project requires an agentic development environment: Claude Code, DSH, Antigravity, Cursor, or equivalent with filesystem and command access. I can only see what you paste, so I cannot implement, test, or verify changes here. Open the repository in one of those tools. I can still review code you paste, if you explicitly ask for review only.
+
+Then stop. No code, no partial patches, no step-by-step implementation plan presented as work. Review-only discussion is allowed only when the user explicitly asks for review. Never imply you read files you were not given.
 
 ## Load skills before the work they cover
 
@@ -57,10 +71,10 @@ CI (`.github/workflows/ci.yml`) runs `ruff check`, `ruff format --check`, `pytho
 - Files touched, and whether the change preserves behavior.
 - Anything unverified, labelled as unverified.
 
-## Chat-only tools
-
-Claude Chat cannot run `make` targets. A repo snapshot in Project knowledge is a snapshot, not a live checkout. Its simplification output is a proposed patch that a human or CLI agent applies and verifies. Never describe chat output as verified.
-
 ## Skills are read-only
 
 Do not edit `./skills/*.md` as part of normal work. If a skill looks wrong for this repo, report it — do not patch it in the same change.
+
+## Reusable template
+
+To apply these rules to another project, start from `docs/agentic-entry-template.md`.
