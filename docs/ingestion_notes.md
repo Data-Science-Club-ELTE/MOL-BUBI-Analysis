@@ -3,10 +3,11 @@
 ## 1. API access and key status
 - Portal: BKK OpenData Portal (opendata.bkk.hu), section "Key management".
 - Own key requested on 2026-10-18 at 18:28 (portal time) as a non-commercial student project (Data Science Club ELTE).
-- The portal says a requested key can be used after approval by BKK. It is not known whether an approval step happened or whether it was automatic.
+- The portal says a requested key can be used only after BKK approves it. No approval has been received so far.
 - The key worked about 6 minutes after the request (first snapshot at 18:34 local time, 16:34 UTC).
 - Key check on the same endpoint (2026-10-18): no key -> HTTP 401, wrong key -> HTTP 401, own key -> HTTP 200. So the endpoint does validate the key.
-- Access blocker: none.
+- On 2026-10-26 the key owner emailed BKK to ask when the approval will arrive. No reply yet.
+- Access status: technically the key works, but formal approval is pending. Until BKK replies, no new API requests are made; the two existing snapshots are enough, and the station table and tests use the saved raw file only.
 
 ## 2. Request
 - Endpoint: `https://futar.bkk.hu/api/query/v1/ws/otp/api/where/bicycle-rental.json`

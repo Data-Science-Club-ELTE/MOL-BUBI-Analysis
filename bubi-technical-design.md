@@ -547,6 +547,7 @@ Built-in boundaries of what the results can claim; each is documented in the met
 ### 14.1 Data, access, and licensing
 
 - Ratify the real-data acceptance deadline (proposed: end of week 4) and record what happens if no data arrives.
+- Obtain BKK's approval for the Futár API key. The key works, but the portal says it may be used only after approval, which has not arrived; BKK was asked by email on 2026-10-26. No new requests are made until then (`docs/ingestion_notes.md` §1).
 - Resolve BKK Futár licensing, attribution, and raw-snapshot redistribution terms (`docs/source_inventory.md` marks them unresolved).
 - Record the OSM extract date and store or document the frozen graph artifact behind the `budapest_osm_2026w1` label.
 - Confirm the exact DEM product and version behind `copernicus_dem_30m`.
