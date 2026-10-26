@@ -50,6 +50,7 @@ Unconfirmed items are marked **UNRESOLVED** rather than assumed.
 - **Attribution:** **UNRESOLVED**
 - **Access:** Requires registering at https://opendata.bkk.hu and requesting a free API key. The key must **not** be committed to the repo (use an environment variable or a git-ignored config file).
 - **Open questions:**
+  - Key approval: the key was requested on 2026-10-18 and works, but the portal says it may be used only after BKK approval, which has not arrived. BKK was asked by email on 2026-10-26. **UNRESOLVED** (details: `docs/ingestion_notes.md` §1)
   - Can raw API responses or snapshots be stored and shared in the repo? **UNRESOLVED**
   - Rate limits? **UNRESOLVED**
   - Does the API still include MOL Bubi station data? **UNRESOLVED**

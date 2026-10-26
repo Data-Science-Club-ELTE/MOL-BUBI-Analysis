@@ -111,6 +111,8 @@ flowchart LR
 | --- | --- | --- |
 | Contract schemas and I/O | `contracts/schemas.py`, `contracts/io.py` | Implemented; 8 schemas (7 tables + trip-matrix interface) |
 | Futár raw snapshot | `ingestion/futar_snapshot.py` | Implemented |
+| Station ingestion interface | `ingestion/futar.py` (`ingest_futar_stations`) | Implemented; frozen snapshot date in config |
+| Observed routes converter | `ingestion/observed_routes.py` | Draft on mock data; map-matching is a placeholder |
 | Processed station table | `ingestion/stations_table.py` | Implemented; produces `data/processed/stations.parquet` with 704 rows |
 | Synthetic demand (gravity) | `demand/gravity.py` | Implemented |
 | Station filtering, connectivity, selection | `stations/selector.py` | Implemented |
@@ -201,9 +203,9 @@ Two caveats, both important for reproducibility: no code reads this file yet (de
 
 ### 5.4 Real data
 
-`trips` and `gps_points` are not in the contract for now. When real data arrives, a conversion step writes `routes` rows with `route_type = observed`, and nothing downstream changes. Timestamp rules (store UTC, convert to Europe/Budapest for time-of-day binning) are defined then. The implemented volume step already aggregates synthetic and observed routes of one scenario together; filter `route_type` first if only one source is wanted.
+`trips` and `gps_points` are not in the contract for now. When real data arrives, a conversion step writes `routes` rows with `route_type = observed`, and nothing downstream changes. Timestamp rules: store UTC, convert to Europe/Budapest only for time-of-day binning; the draft converter (§6.1) applies them. The implemented volume step already aggregates synthetic and observed routes of one scenario together; filter `route_type` first if only one source is wanted.
 
-**Items the contract must still fix:** the real-data acceptance deadline (proposed: end of week 4, so it can feed week 5 scenario runs); the frozen station snapshot date; BKK licensing and attribution terms for the station data, including whether raw snapshots may be redistributed; the OSM extract date and frozen graph artifact; the canonical representation of `edges`/`edge_ids`; and composite-key uniqueness. §14 tracks these.
+**Items the contract must still fix:** the real-data acceptance deadline (proposed: end of week 4, so it can feed week 5 scenario runs); BKK licensing and attribution terms for the station data, including whether raw snapshots may be redistributed; the OSM extract date and frozen graph artifact; the canonical representation of `edges`/`edge_ids`; and composite-key uniqueness. §14 tracks these.
 
 ---
 
@@ -217,6 +219,8 @@ Each module is developed against the frozen contract and committed fixtures, so 
 
 `ingestion/stations_table.py` converts a raw snapshot into `data/processed/stations.parquet`. The raw response mixes fixed stations with free-floating bikes. The script selects fixed stations in two independent ways and writes the table only when both selections agree: `type == "virtual"`, and style icon not equal to `vehicle-rental/mol-bubi-floating`. The 18 October 2026 snapshot produced 704 stations: `station_id`, `name`, `lat`, `lon`, sorted by `station_id`.
 
+`ingestion/futar.py` exposes `ingest_futar_stations`, which returns the same table as a DataFrame without writing it. Given `raw_path` it works offline; otherwise it reads the API key, saves the raw response under `data/raw/` first, and then converts it. It raises `IngestionError` if the key is missing, the response is not HTTP 200, or the two selection rules disagree. The frozen snapshot is recorded under `stations` in `config/default_config.yaml`: date `2026-10-18`, file `futar_bicycle_rental_20261018T163442Z.json`, and its SHA-256 digest.
+
 Documented commands:
 
 ```bash
@@ -229,7 +233,7 @@ python -m bubi.ingestion.stations_table data/raw/futar_bicycle_rental_<stamp>.js
 
 The BKK key is held by a team member and is deliberately absent from the repository. Raw snapshots are git-ignored, so they are kept in the team's shared Google Drive folder `MOL-BUBI_DSC/raw_futar_bicycle_rental`; copy the required snapshot into `data/raw/` to run the conversion. Neither command was exercised during this revision because no key or raw snapshot was present in this checkout. Both are covered by tests with synthetic payloads in `tests/test_ingestion.py` and `tests/test_stations_table.py`. Acquisition evidence, including the record-type finding, is in `docs/ingestion_notes.md`.
 
-**Planned:** conversion of real trip and GPS data into `routes` rows with `route_type = observed`.
+`ingestion/observed_routes.py` is a draft converter from real trips and GPS points into `routes` rows with `route_type = observed` and `scenario = baseline`. No real data exists yet, so it runs on mock files in an assumed format documented in `src/bubi/ingestion/README.md` §8. It stores timestamps in UTC, uses Europe/Budapest only for local-hour binning, drops and reports trips with unknown stations or unresolvable times, merges identical routes by summing `trip_count`, and stores `edges` as a list. Map-matching (`map_match_trace`) is a placeholder that raises `NotImplementedError`.
 
 ### 6.2 OSM network and bike-lane model (planned)
 
@@ -359,7 +363,7 @@ The runner (`run_all_scenarios`) and the comparison view (`build_scenario_compar
 3. Emit routes in the same `routes` schema with `route_type = observed`.
 4. Re-run coverage, scoring, scenario, and dashboard layers unchanged.
 
-The conversion step in step 1 and the map-matching in step 2 are not implemented. The volume step already accepts observed routes and merges them with synthetic routes of the same scenario; filter `route_type` to separate them. Scenarios with proposed stations still rely on the demand model for the new stations' trips. If no real data arrives by the contract deadline, outputs stay synthetic and clearly labelled.
+The conversion step in step 1 is drafted against mock data (§6.1); its input format is an assumption to check against the real data. The map-matching in step 2 is a placeholder. The volume step already accepts observed routes and merges them with synthetic routes of the same scenario; filter `route_type` to separate them. Scenarios with proposed stations still rely on the demand model for the new stations' trips. If no real data arrives by the contract deadline, outputs stay synthetic and clearly labelled.
 
 ---
 
@@ -508,7 +512,7 @@ Things that could go wrong during the project, with how each is handled.
 | --- | --- |
 | Real trip/GPS data may be unavailable or late | Fully synthetic trips and routes by design; contract deadline for real data; outputs clearly labelled |
 | The Futár API provides no historical trip data (only a live station list) | Stations come from Futár; trips are generated; real data is plugged in if obtained from another source |
-| Futár snapshot contents change between requests | Treat each snapshot as immutable, record retrieval metadata, and freeze one snapshot date in config; the processed table currently derives from the 18 October 2026 snapshot |
+| Futár snapshot contents change between requests | Treat each snapshot as immutable, record retrieval metadata, and freeze one snapshot in config; `stations.snapshot_date` is `2026-10-18` |
 | BKK licensing and redistribution terms are unresolved | Record the open status in the source inventory; keep raw snapshots out of git; review the committed processed station table against the terms before a public release |
 | Straight-line distance stands in for walking and network distance | Labelled as a lower bound (D15); replace with walking-graph and routed distance when §6.2 and §6.4 land; avoid claiming precise walking coverage |
 | Network, population, routing, and gap-scoring modules are missing, so no end-to-end pipeline exists | Modules are isolated behind the frozen contract and fixtures; module-level tests; §3.1 makes the gap explicit rather than implying a working pipeline |
@@ -544,7 +548,7 @@ Built-in boundaries of what the results can claim; each is documented in the met
 ### 14.1 Data, access, and licensing
 
 - Ratify the real-data acceptance deadline (proposed: end of week 4) and record what happens if no data arrives.
-- Freeze the Futár station snapshot date in config; the processed table currently comes from the 18 October 2026 snapshot, and later snapshots differ in composition.
+- Obtain BKK's approval for the Futár API key. The key works, but the portal says it may be used only after approval, which has not arrived; BKK was asked by email on 2026-10-26. No new requests are made until then (`docs/ingestion_notes.md` §1).
 - Resolve BKK Futár licensing, attribution, and raw-snapshot redistribution terms (`docs/source_inventory.md` marks them unresolved).
 - Record the OSM extract date and store or document the frozen graph artifact behind the `budapest_osm_2026w1` label.
 - Confirm the exact DEM product and version behind `copernicus_dem_30m`.
