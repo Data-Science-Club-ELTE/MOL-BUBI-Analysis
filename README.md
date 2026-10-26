@@ -86,7 +86,3 @@ All data passing between modules is strictly validated using [Pandera](https://p
    ```bash
    make lint
    ```
-
-The standalone routing prototype and its lightweight Parquet reader live under
-`src/bubi/prototype/`, separate from the application modules to avoid package
-name collisions while keeping both available in the installed project.
