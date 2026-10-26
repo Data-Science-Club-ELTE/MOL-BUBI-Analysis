@@ -112,6 +112,7 @@ flowchart LR
 | Contract schemas and I/O | `contracts/schemas.py`, `contracts/io.py` | Implemented; 8 schemas (7 tables + trip-matrix interface) |
 | Futár raw snapshot | `ingestion/futar_snapshot.py` | Implemented |
 | Station ingestion interface | `ingestion/futar.py` (`ingest_futar_stations`) | Implemented; frozen snapshot date in config |
+| Observed routes converter | `ingestion/observed_routes.py` | Draft on mock data; map-matching is a placeholder |
 | Processed station table | `ingestion/stations_table.py` | Implemented; produces `data/processed/stations.parquet` with 704 rows |
 | Synthetic demand (gravity) | `demand/gravity.py` | Implemented |
 | Station filtering, connectivity, selection | `stations/selector.py` | Implemented |
@@ -202,7 +203,7 @@ Two caveats, both important for reproducibility: no code reads this file yet (de
 
 ### 5.4 Real data
 
-`trips` and `gps_points` are not in the contract for now. When real data arrives, a conversion step writes `routes` rows with `route_type = observed`, and nothing downstream changes. Timestamp rules (store UTC, convert to Europe/Budapest for time-of-day binning) are defined then. The implemented volume step already aggregates synthetic and observed routes of one scenario together; filter `route_type` first if only one source is wanted.
+`trips` and `gps_points` are not in the contract for now. When real data arrives, a conversion step writes `routes` rows with `route_type = observed`, and nothing downstream changes. Timestamp rules: store UTC, convert to Europe/Budapest only for time-of-day binning; the draft converter (§6.1) applies them. The implemented volume step already aggregates synthetic and observed routes of one scenario together; filter `route_type` first if only one source is wanted.
 
 **Items the contract must still fix:** the real-data acceptance deadline (proposed: end of week 4, so it can feed week 5 scenario runs); BKK licensing and attribution terms for the station data, including whether raw snapshots may be redistributed; the OSM extract date and frozen graph artifact; the canonical representation of `edges`/`edge_ids`; and composite-key uniqueness. §14 tracks these.
 
@@ -232,7 +233,7 @@ python -m bubi.ingestion.stations_table data/raw/futar_bicycle_rental_<stamp>.js
 
 The BKK key is held by a team member and is deliberately absent from the repository. Raw snapshots are git-ignored, so they are kept in the team's shared Google Drive folder `MOL-BUBI_DSC/raw_futar_bicycle_rental`; copy the required snapshot into `data/raw/` to run the conversion. Neither command was exercised during this revision because no key or raw snapshot was present in this checkout. Both are covered by tests with synthetic payloads in `tests/test_ingestion.py` and `tests/test_stations_table.py`. Acquisition evidence, including the record-type finding, is in `docs/ingestion_notes.md`.
 
-**Planned:** conversion of real trip and GPS data into `routes` rows with `route_type = observed`.
+`ingestion/observed_routes.py` is a draft converter from real trips and GPS points into `routes` rows with `route_type = observed` and `scenario = baseline`. No real data exists yet, so it runs on mock files in an assumed format documented in `src/bubi/ingestion/README.md` §8. It stores timestamps in UTC, uses Europe/Budapest only for local-hour binning, drops and reports trips with unknown stations or unresolvable times, merges identical routes by summing `trip_count`, and stores `edges` as a list. Map-matching (`map_match_trace`) is a placeholder that raises `NotImplementedError`.
 
 ### 6.2 OSM network and bike-lane model (planned)
 
@@ -362,7 +363,7 @@ The runner (`run_all_scenarios`) and the comparison view (`build_scenario_compar
 3. Emit routes in the same `routes` schema with `route_type = observed`.
 4. Re-run coverage, scoring, scenario, and dashboard layers unchanged.
 
-The conversion step in step 1 and the map-matching in step 2 are not implemented. The volume step already accepts observed routes and merges them with synthetic routes of the same scenario; filter `route_type` to separate them. Scenarios with proposed stations still rely on the demand model for the new stations' trips. If no real data arrives by the contract deadline, outputs stay synthetic and clearly labelled.
+The conversion step in step 1 is drafted against mock data (§6.1); its input format is an assumption to check against the real data. The map-matching in step 2 is a placeholder. The volume step already accepts observed routes and merges them with synthetic routes of the same scenario; filter `route_type` to separate them. Scenarios with proposed stations still rely on the demand model for the new stations' trips. If no real data arrives by the contract deadline, outputs stay synthetic and clearly labelled.
 
 ---
 

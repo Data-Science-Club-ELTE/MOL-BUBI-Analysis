@@ -2,12 +2,14 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pandas as pd
 import pytest
 import yaml
 
-from bubi.contracts.schemas import StationsSchema
+from bubi.contracts.schemas import RoutesSchema, StationsSchema
 from bubi.ingestion import futar_snapshot as fs
 from bubi.ingestion import ingest_futar_stations
+from bubi.ingestion import observed_routes as or_
 
 SAMPLE_RESPONSE = Path(__file__).parent / "fixtures" / "futar_bicycle_rental_sample.json"
 
@@ -146,3 +148,115 @@ def test_frozen_snapshot_is_recorded_in_config():
     assert stations["snapshot_date"] == "2026-10-18"
     assert stations["snapshot_file"].startswith("futar_bicycle_rental_20261018T")
     assert len(stations["snapshot_sha256"]) == 64
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+MOCK_EDGES = {"t01": ["n1-n2-0"], "t02": ["n1-n2-0"], "t03": ["n2-n4-0", "n4-n2-0"]}
+
+
+def _mock_inputs():
+    trips = pd.read_csv(FIXTURES / "mock_trips.csv")
+    gps = pd.read_csv(FIXTURES / "mock_gps_points.csv")
+    stations = pd.read_parquet(FIXTURES / "sample_stations.parquet")
+    return trips, gps, stations
+
+
+def _fake_matcher(points):
+    return MOCK_EDGES[points["trip_id"].iloc[0]]
+
+
+def test_to_utc_offsets_local_time_and_dst():
+    values = pd.Series(
+        [
+            "2026-10-20T08:05:00+02:00",  # offset given
+            "2026-10-20T06:05:00Z",
+            "2026-10-20T08:05:00",  # naive -> Europe/Budapest (CEST, UTC+2)
+            "2026-12-01T08:05:00",  # naive in winter (CET, UTC+1)
+            "2026-10-25T02:30:00",  # ambiguous: clocks go back at 03:00
+            "2026-03-29T02:30:00",  # nonexistent: clocks jump to 03:00
+            "not a time",
+            None,
+        ]
+    )
+    utc = or_.to_utc(values)
+    expected = pd.Timestamp("2026-10-20T06:05:00Z")
+    assert list(utc[:3]) == [expected] * 3
+    assert utc[3] == pd.Timestamp("2026-12-01T07:05:00Z")
+    assert utc[4:].isna().all()
+
+
+def test_normalize_trips_bins_by_budapest_hour_and_drops_invalid_times():
+    trips, _, _ = _mock_inputs()
+    df, report = or_.normalize_trips(trips)
+
+    assert report["invalid_time"] == 2
+    assert report["invalid_time_ids"] == ["t05", "t07"]  # DST-ambiguous, ends before start
+    assert str(df["start_time_utc"].dt.tz) == "UTC"
+    hours = dict(zip(df["trip_id"], df["start_hour_local"]))
+    assert hours["t03"] == 8  # 06:30Z is 08:30 in Budapest
+
+
+def test_normalize_trips_rejects_duplicates_and_missing_columns():
+    trips, _, _ = _mock_inputs()
+    with pytest.raises(or_.ConversionError, match="Duplicate"):
+        or_.normalize_trips(pd.concat([trips, trips.head(1)]))
+    with pytest.raises(or_.ConversionError, match="end_time"):
+        or_.normalize_trips(trips.drop(columns="end_time"))
+
+
+def test_unmatched_stations_are_counted_and_reported():
+    trips, _, stations = _mock_inputs()
+    normalized, _ = or_.normalize_trips(trips)
+    matched, report = or_.match_stations(normalized, stations)
+
+    assert report["unmatched_station"] == 1
+    assert report["unmatched_station_trip_ids"] == ["t04"]
+    assert report["unknown_station_ids"] == ["ghost_999"]
+    assert "t04" not in set(matched["trip_id"])
+
+
+def test_convert_merges_identical_routes_and_validates():
+    trips, gps, stations = _mock_inputs()
+    routes, report = or_.convert_observed_routes(trips, gps, stations, matcher=_fake_matcher)
+
+    RoutesSchema.validate(routes)
+    assert set(routes["route_type"]) == {"observed"}
+    assert set(routes["scenario"]) == {"baseline"}
+    merged = routes.set_index(["start_station_id", "end_station_id"])
+    assert merged.loc[("futar_001", "futar_002"), "trip_count"] == 2.0  # t01 + t02
+    assert merged.loc[("futar_001", "futar_002"), "edges"] == ["n1-n2-0"]
+    assert merged.loc[("futar_002", "futar_003"), "edges"] == ["n2-n4-0", "n4-n2-0"]
+
+    assert report["input_trips"] == 7
+    assert report["converted_trips"] == 3 and report["routes"] == 2
+    assert report["no_gps_trip_ids"] == ["t06"]
+    assert report["invalid_gps_points"] == 1  # t05 point is DST-ambiguous
+    assert report["trips_by_local_hour"] == {8: 3}
+
+
+def test_convert_passes_time_sorted_utc_trace_to_matcher():
+    trips, gps, stations = _mock_inputs()
+    seen = {}
+
+    def recording_matcher(points):
+        seen[points["trip_id"].iloc[0]] = list(points["timestamp_utc"])
+        return _fake_matcher(points)
+
+    or_.convert_observed_routes(trips, gps, stations, matcher=recording_matcher)
+    assert seen["t02"] == sorted(seen["t02"])  # rows were out of order in the file
+    assert seen["t02"][0] == pd.Timestamp("2026-10-20T06:15:00Z")
+
+
+def test_convert_counts_traces_the_matcher_cannot_match():
+    trips, gps, stations = _mock_inputs()
+    routes, report = or_.convert_observed_routes(trips, gps, stations, matcher=lambda points: [])
+
+    assert routes.empty
+    RoutesSchema.validate(routes)
+    assert report["unmatched_trace"] == 3
+
+
+def test_map_matching_is_a_placeholder():
+    trips, gps, stations = _mock_inputs()
+    with pytest.raises(NotImplementedError, match="placeholder"):
+        or_.convert_observed_routes(trips, gps, stations)
