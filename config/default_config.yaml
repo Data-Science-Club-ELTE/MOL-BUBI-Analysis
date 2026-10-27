@@ -23,7 +23,7 @@ demand:
   population_threshold_per_cell: 100
   gravity_scaling_k: 0.05
   gravity_distance_decay: "exponential"  # or power_law
-  gravity_beta: 0.0015
+  gravity_beta: 0.0006666667
 
 station_scoring:
   walk_coverage_threshold_m: 350.0
