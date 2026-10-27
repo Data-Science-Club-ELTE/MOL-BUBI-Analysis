@@ -11,8 +11,8 @@ Run with ``make dashboard``.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from pathlib import Path
+import os
+from dataclasses import dataclass, replace
 
 import folium
 import h3
@@ -22,17 +22,18 @@ from streamlit_folium import st_folium
 
 from bubi.dashboard.data import (
     BUDAPEST_CENTER,
-    DEFAULT_BBOX,
+    DATA_DIR_ENV,
     SCENARIOS,
     DashboardData,
     DashboardDataError,
     as_id_list,
     cell_center,
+    fixture_notes,
     for_scenario,
-    in_bbox,
     load_config,
     load_dashboard_data,
-    resolve_data_dir,
+    proposed_stations,
+    resolve_table_paths,
 )
 
 LANE_COLOR = "#2b8a3e"  # lane exists in this direction
@@ -42,6 +43,21 @@ STATION_COLOR = "#1c7ed6"
 PROPOSED_COLOR = "#2b8a3e"
 ROUTE_COLOR = "#7048e8"
 POPULATION_COLOR = "#f08c00"
+
+# CartoDB basemaps now need an API key; both of these work without one.
+BASEMAPS = {
+    "OpenStreetMap": {"tiles": "OpenStreetMap"},
+    "Light grey (Esri)": {
+        "tiles": (
+            "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/"
+            "World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+        ),
+        "attr": "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors",
+        # tiles stop at zoom 16; Leaflet scales them up beyond that
+        "max_native_zoom": 16,
+        "max_zoom": 19,
+    },
+}
 
 SCENARIO_HELP = {
     "baseline": "Existing Futár stations only.",
@@ -53,6 +69,7 @@ SCENARIO_HELP = {
 @dataclass
 class Settings:
     scenario: str
+    basemap: str
     show_stations: bool
     show_proposed: bool
     show_population: bool
@@ -66,13 +83,14 @@ class Settings:
 
 
 @st.cache_data(show_spinner="Loading data tables…")
-def _cached_load(data_dir: str, source: str, files_changed_at: float) -> DashboardData:
-    """Cached per folder; ``files_changed_at`` makes the cache reload after data changes."""
-    return load_dashboard_data(Path(data_dir), source)
+def _cached_load(data_dir_override: str | None, files_changed_at: float) -> DashboardData:
+    """Cached per data folder; ``files_changed_at`` makes the cache reload after data changes."""
+    return load_dashboard_data()
 
 
-def _latest_change(data_dir: Path) -> float:
-    return max((p.stat().st_mtime for p in data_dir.glob("*.parquet")), default=0.0)
+def _latest_change() -> float:
+    paths = [path for path, _ in resolve_table_paths().values() if path.exists()]
+    return max((path.stat().st_mtime for path in paths), default=0.0)
 
 
 def edge_ids_of_corridors(corridors: pd.DataFrame) -> set[str]:
@@ -119,15 +137,14 @@ def map_center(stations: pd.DataFrame) -> tuple[float, float]:
     return float(stations["lat"].mean()), float(stations["lon"].mean())
 
 
-def build_map(data: DashboardData, settings: Settings, bbox) -> tuple[folium.Map, list[str]]:
+def build_map(data: DashboardData, settings: Settings) -> tuple[folium.Map, list[str]]:
     """Draw the enabled layers. Returns the map and notes about anything not drawn."""
     notes: list[str] = []
     stations = data.get("stations")
     edges = data.get("edges")
     scenario = settings.scenario
 
-    # CartoDB basemaps now need an API key, so use plain OpenStreetMap tiles.
-    fmap = folium.Map(location=map_center(stations), zoom_start=14, tiles="OpenStreetMap")
+    fmap = folium.Map(location=map_center(stations), zoom_start=14, **BASEMAPS[settings.basemap])
 
     population = data.get("population")
     if settings.show_population and population is not None and not population.empty:
@@ -135,8 +152,7 @@ def build_map(data: DashboardData, settings: Settings, bbox) -> tuple[folium.Map
         max_pop = float(population["population"].max()) or 1.0
         skipped = 0
         for _, row in population.iterrows():
-            center = cell_center(row["cell_id"])
-            if center is None or not in_bbox(center[0], center[1], bbox):
+            if cell_center(row["cell_id"]) is None:
                 skipped += 1
                 continue
             folium.Polygon(
@@ -149,9 +165,7 @@ def build_map(data: DashboardData, settings: Settings, bbox) -> tuple[folium.Map
             ).add_to(layer)
         layer.add_to(fmap)
         if skipped:
-            notes.append(
-                f"{skipped} population cell(s) lie outside the study area and are not drawn."
-            )
+            notes.append(f"{skipped} population cell(s) have an invalid H3 id and are not drawn.")
 
     if settings.show_lanes and not edges.empty:
         layer = folium.FeatureGroup(name="Bike-lane coverage")
@@ -221,13 +235,13 @@ def build_map(data: DashboardData, settings: Settings, bbox) -> tuple[folium.Map
             ).add_to(layer)
         layer.add_to(fmap)
 
-    candidates = for_scenario(data.get("station_candidates"), scenario)
+    candidates = proposed_stations(data, scenario)
     if settings.show_proposed and not candidates.empty:
         layer = folium.FeatureGroup(name="Proposed stations")
         skipped = 0
         for _, row in candidates.iterrows():
             center = cell_center(row["cell_id"])
-            if center is None or not in_bbox(center[0], center[1], bbox):
+            if center is None:
                 skipped += 1
                 continue
             folium.RegularPolygonMarker(
@@ -245,9 +259,7 @@ def build_map(data: DashboardData, settings: Settings, bbox) -> tuple[folium.Map
             ).add_to(layer)
         layer.add_to(fmap)
         if skipped:
-            notes.append(
-                f"{skipped} proposed station(s) have an H3 cell outside the study area and are not drawn."
-            )
+            notes.append(f"{skipped} proposed station(s) have an invalid H3 id and are not drawn.")
 
     return fmap, notes
 
@@ -260,7 +272,11 @@ def render_header(data: DashboardData | None) -> None:
     left.title("🚲 MOL Bubi Bike-Lane & Station Recommendation Tool")
     if data is None:
         return
-    source = "sample fixtures" if data.source == "fixtures" else "pipeline outputs"
+    source = {
+        "fixtures": "sample fixtures",
+        "processed": "pipeline outputs",
+        "mixed": "pipeline outputs + sample fixtures",
+    }[data.source]
     right.warning(f"**Synthetic demo data** (D5) · {source}")
 
 
@@ -281,6 +297,11 @@ def render_sidebar(config: dict) -> Settings:
     sidebar.header("Map layers")
     settings = Settings(
         scenario=scenario,
+        basemap=sidebar.selectbox(
+            "Basemap",
+            options=list(BASEMAPS),
+            help="The light grey basemap makes the lane colours easier to read on a projector.",
+        ),
         show_stations=sidebar.checkbox("Existing stations", value=True),
         show_proposed=sidebar.checkbox("Proposed stations", value=True),
         show_population=sidebar.checkbox("Population (H3 cells)", value=False),
@@ -309,7 +330,7 @@ def render_sidebar(config: dict) -> Settings:
 
 def render_metrics(data: DashboardData, scenario: str) -> None:
     stations = data.get("stations")
-    candidates = for_scenario(data.get("station_candidates"), scenario)
+    candidates = proposed_stations(data, scenario)
     corridors = for_scenario(data.get("corridors"), scenario)
     routes = for_scenario(data.get("routes"), scenario)
     edges = data.get("edges")
@@ -344,13 +365,25 @@ def render_detail_panel(map_state: dict | None) -> None:
     )
 
 
-def render_scenario_comparison(data: DashboardData) -> None:
+def render_scenario_comparison(data: DashboardData, settings: Settings) -> None:
     st.subheader("Scenario comparison")
     st.caption(
-        "Week 5: small maps per scenario, demand per newly served person, people served per km "
-        "of new corridor, and robust vs station-dependent corridors. Counts below come from the "
-        "loaded tables."
+        "One map per scenario with the layers selected in the sidebar. Week 5 adds demand per "
+        "newly served person, people served per km of new corridor, and robust vs "
+        "station-dependent corridors. Counts below come from the loaded tables."
     )
+    for column, scenario in zip(st.columns(len(SCENARIOS)), SCENARIOS):
+        with column:
+            st.markdown(f"**{scenario}**")
+            fmap, _ = build_map(data, replace(settings, scenario=scenario))
+            st_folium(
+                fmap,
+                height=300,
+                use_container_width=True,
+                returned_objects=[],
+                key=f"comparison_map_{scenario}",
+            )
+
     rows = []
     for scenario in SCENARIOS:
         corridors = for_scenario(data.get("corridors"), scenario)
@@ -358,7 +391,7 @@ def render_scenario_comparison(data: DashboardData) -> None:
         rows.append(
             {
                 "scenario": scenario,
-                "proposed stations": len(for_scenario(data.get("station_candidates"), scenario)),
+                "proposed stations": len(proposed_stations(data, scenario)),
                 "corridors": len(corridors),
                 "synthetic trips": float(routes["trip_count"].sum()) if not routes.empty else 0.0,
             }
@@ -389,6 +422,7 @@ def render_tables(data: DashboardData, scenario: str) -> None:
             st.write("No proposed stations in this scenario.")
         else:
             table = candidates.sort_values("rank")
+            st.caption("Candidates without a rank were not selected as new stations.")
             st.dataframe(table, hide_index=True, width="stretch")
             st.download_button(
                 "📥 Export station candidates (CSV)",
@@ -419,12 +453,10 @@ def main() -> None:
         layout="wide",
     )
     config = load_config()
-    bbox = tuple(config.get("spatial", {}).get("study_area_bbox") or DEFAULT_BBOX)
     settings = render_sidebar(config)
 
     try:
-        data_dir, source = resolve_data_dir()
-        data = _cached_load(str(data_dir), source, _latest_change(data_dir))
+        data = _cached_load(os.environ.get(DATA_DIR_ENV), _latest_change())
     except DashboardDataError as err:
         render_header(None)
         st.error(f"**The dashboard cannot start because of a data problem.**\n\n{err}")
@@ -436,21 +468,18 @@ def main() -> None:
 
     render_metrics(data, settings.scenario)
 
-    map_col, detail_col = st.columns([3, 1])
-    with map_col:
-        fmap, notes = build_map(data, settings, bbox)
-        map_state = st_folium(
-            fmap,
-            height=520,
-            use_container_width=True,
-            returned_objects=["last_object_clicked_tooltip"],
-        )
-        for note in notes:
-            st.caption(f"⚠️ {note}")
-    with detail_col:
-        render_detail_panel(map_state)
+    fmap, notes = build_map(data, settings)
+    map_state = st_folium(
+        fmap,
+        height=560,
+        use_container_width=True,
+        returned_objects=["last_object_clicked_tooltip"],
+    )
+    for note in fixture_notes(data) + notes:
+        st.caption(f"⚠️ {note}")
+    render_detail_panel(map_state)
 
-    render_scenario_comparison(data)
+    render_scenario_comparison(data, settings)
     render_tables(data, settings.scenario)
 
 

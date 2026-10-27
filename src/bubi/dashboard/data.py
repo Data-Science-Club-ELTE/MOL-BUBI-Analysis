@@ -1,10 +1,11 @@
 """Load and validate the contract tables the dashboard reads.
 
-The dashboard reads from ``data/processed/`` when pipeline outputs exist there and
-falls back to the sample fixtures in ``tests/fixtures/`` otherwise. It never calls
-an external API. Every table is validated against its data contract, and any
-problem is raised as a :class:`DashboardDataError` with a message the app can show
-to the user instead of a raw traceback.
+Each table is read from ``data/processed/`` when the pipeline has produced it and
+from the sample fixtures in ``tests/fixtures/`` otherwise, so the dashboard keeps
+working while the pipeline is only partly built. It never calls an external API.
+Every table is validated against its data contract, and any problem is raised as a
+:class:`DashboardDataError` with a message the app can show to the user instead of
+a raw traceback.
 """
 
 from __future__ import annotations
@@ -36,7 +37,6 @@ OPTIONAL_TABLES = ("population", "station_candidates", "edge_scores", "corridors
 
 SCENARIOS = ("baseline", "lane_aware", "population_only")
 BUDAPEST_CENTER = (47.4979, 19.0541)
-DEFAULT_BBOX = (18.92, 47.35, 19.33, 47.61)  # min_lon, min_lat, max_lon, max_lat
 
 
 class DashboardDataError(Exception):
@@ -47,37 +47,58 @@ class DashboardDataError(Exception):
 class DashboardData:
     """Contract tables loaded for the dashboard, plus notes about anything skipped."""
 
-    source: str  # "processed" or "fixtures"
-    data_dir: Path
+    paths: dict[str, Path] = field(default_factory=dict)
+    sources: dict[str, str] = field(default_factory=dict)  # "processed" or "fixtures"
     tables: dict[str, pd.DataFrame] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
     def get(self, name: str) -> pd.DataFrame | None:
         return self.tables.get(name)
 
+    @property
+    def fixture_tables(self) -> list[str]:
+        """Loaded tables that come from test data rather than pipeline outputs."""
+        return [name for name in self.tables if self.sources.get(name) == "fixtures"]
 
-def resolve_data_dir(
-    processed_dir: Path = PROCESSED_DIR, fixtures_dir: Path = FIXTURES_DIR
-) -> tuple[Path, str]:
-    """Use processed pipeline outputs if they exist, otherwise the sample fixtures.
-
-    Setting the ``BUBI_DATA_DIR`` environment variable points the dashboard at
-    another folder (used by the tests). Tables are never mixed between sources,
-    so real and sample data cannot end up on the same map.
-    """
-    override = os.environ.get(DATA_DIR_ENV)
-    if override:
-        path = Path(override)
-        return path, ("fixtures" if any(path.glob("sample_*.parquet")) else "processed")
-    if (processed_dir / "stations.parquet").exists():
-        return processed_dir, "processed"
-    return fixtures_dir, "fixtures"
+    @property
+    def source(self) -> str:
+        """``processed``, ``fixtures`` or ``mixed``, for the data-mode badge."""
+        kinds = {self.sources[name] for name in self.tables}
+        return kinds.pop() if len(kinds) == 1 else "mixed"
 
 
 def table_path(data_dir: Path, table_name: str, source: str) -> Path:
     """Fixtures are named ``sample_<table>.parquet``; pipeline outputs ``<table>.parquet``."""
     prefix = "sample_" if source == "fixtures" else ""
     return data_dir / f"{prefix}{table_name}.parquet"
+
+
+def resolve_table_paths(
+    data_dir: Path | None = None,
+    processed_dir: Path = PROCESSED_DIR,
+    fixtures_dir: Path = FIXTURES_DIR,
+) -> dict[str, tuple[Path, str]]:
+    """Where each table is read from, and whether that file is pipeline output or test data.
+
+    By default every table comes from ``processed_dir`` if the pipeline has written it
+    and from ``fixtures_dir`` otherwise. ``data_dir`` (or the ``BUBI_DATA_DIR``
+    environment variable, used by the tests) reads every table from one folder instead.
+    """
+    names = REQUIRED_TABLES + OPTIONAL_TABLES
+    if data_dir is None and os.environ.get(DATA_DIR_ENV):
+        data_dir = Path(os.environ[DATA_DIR_ENV])
+    if data_dir is not None:
+        source = "fixtures" if any(data_dir.glob("sample_*.parquet")) else "processed"
+        return {name: (table_path(data_dir, name, source), source) for name in names}
+
+    paths = {}
+    for name in names:
+        processed = table_path(processed_dir, name, "processed")
+        if processed.exists():
+            paths[name] = (processed, "processed")
+        else:
+            paths[name] = (table_path(fixtures_dir, name, "fixtures"), "fixtures")
+    return paths
 
 
 def _first_lines(text: str, max_lines: int = 3, max_chars: int = 400) -> str:
@@ -107,30 +128,33 @@ def load_table(table_name: str, path: Path) -> pd.DataFrame:
         ) from err
 
 
-def load_dashboard_data(data_dir: Path | None = None, source: str | None = None) -> DashboardData:
-    """Load every table the dashboard uses.
+def load_dashboard_data(data_dir: Path | None = None) -> DashboardData:
+    """Load every table the dashboard uses (see :func:`resolve_table_paths` for where from).
 
     Raises:
         DashboardDataError: if a required table is missing or invalid.
     """
-    if data_dir is None:
-        data_dir, source = resolve_data_dir()
-    elif source is None:
-        source = "fixtures" if any(Path(data_dir).glob("sample_*.parquet")) else "processed"
-    data_dir = Path(data_dir)
-
-    data = DashboardData(source=source, data_dir=data_dir)
-
-    for name in REQUIRED_TABLES:
-        data.tables[name] = load_table(name, table_path(data_dir, name, source))
-
-    for name in OPTIONAL_TABLES:
+    data = DashboardData()
+    for name, (path, source) in resolve_table_paths(data_dir).items():
+        data.paths[name] = path
+        data.sources[name] = source
         try:
-            data.tables[name] = load_table(name, table_path(data_dir, name, source))
+            data.tables[name] = load_table(name, path)
         except DashboardDataError as err:
+            if name in REQUIRED_TABLES:
+                raise
             data.warnings.append(f"Layers using `{name}` are switched off. {err}")
-
     return data
+
+
+def fixture_notes(data: DashboardData) -> list[str]:
+    """One note per table that is read from test data instead of pipeline output."""
+    notes = []
+    for name in data.fixture_tables:
+        path = data.paths[name]
+        shown = path.relative_to(REPO_ROOT) if path.is_relative_to(REPO_ROOT) else path
+        notes.append(f"`{name}` is read from test data (`{shown}`), not from pipeline output.")
+    return notes
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
@@ -147,6 +171,14 @@ def for_scenario(df: pd.DataFrame | None, scenario: str) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
     return df[df["scenario"] == scenario]
+
+
+def proposed_stations(data: DashboardData, scenario: str) -> pd.DataFrame:
+    """Candidates selected as new stations; unselected candidates have no rank."""
+    candidates = for_scenario(data.get("station_candidates"), scenario)
+    if candidates.empty:
+        return candidates
+    return candidates[candidates["rank"].notna()]
 
 
 def as_id_list(value: Any) -> list[str]:
@@ -174,8 +206,3 @@ def cell_center(cell_id: str) -> tuple[float, float] | None:
         return h3.cell_to_latlng(cell_id)
     except (ValueError, TypeError, h3.H3BaseException):
         return None
-
-
-def in_bbox(lat: float, lon: float, bbox: tuple[float, float, float, float]) -> bool:
-    min_lon, min_lat, max_lon, max_lat = bbox
-    return min_lat <= lat <= max_lat and min_lon <= lon <= max_lon

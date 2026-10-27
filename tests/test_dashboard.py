@@ -15,8 +15,11 @@ from bubi.dashboard.data import (
     DashboardDataError,
     as_id_list,
     cell_center,
+    fixture_notes,
     for_scenario,
     load_dashboard_data,
+    proposed_stations,
+    resolve_table_paths,
 )
 
 APP_PATH = Path(__file__).resolve().parents[1] / "src" / "bubi" / "dashboard" / "app.py"
@@ -62,6 +65,43 @@ def test_invalid_table_names_the_contract(fixture_copy: Path):
     bad.to_parquet(fixture_copy / "sample_stations.parquet", index=False)
     with pytest.raises(DashboardDataError, match="does not match its data contract"):
         load_dashboard_data(fixture_copy)
+
+
+def test_each_table_falls_back_to_fixtures_on_its_own(
+    monkeypatch, tmp_path: Path, fixtures_dir: Path
+):
+    monkeypatch.delenv(DATA_DIR_ENV, raising=False)
+    processed = tmp_path / "processed"
+    processed.mkdir()
+    shutil.copy(fixtures_dir / "sample_stations.parquet", processed / "stations.parquet")
+
+    paths = resolve_table_paths(processed_dir=processed, fixtures_dir=fixtures_dir)
+
+    assert paths["stations"] == (processed / "stations.parquet", "processed")
+    assert paths["edges"] == (fixtures_dir / "sample_edges.parquet", "fixtures")
+
+
+def test_fixture_notes_name_every_test_table(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    data.sources["stations"] = "processed"
+    notes = fixture_notes(data)
+    assert data.source == "mixed"
+    assert len(notes) == len(data.tables) - 1
+    assert not any("`stations`" in note for note in notes)
+    assert any("`edges`" in note and "sample_edges.parquet" in note for note in notes)
+
+
+def test_proposed_stations_skip_unranked_candidates(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    candidates = data.tables["station_candidates"].copy()
+    candidates["rank"] = candidates["rank"].astype("Int64")
+    candidates.loc[candidates.index[0], "rank"] = pd.NA
+    data.tables["station_candidates"] = candidates
+
+    scenario = candidates.iloc[0]["scenario"]
+    proposed = proposed_stations(data, scenario)
+    assert len(proposed) == len(for_scenario(candidates, scenario)) - 1
+    assert proposed["rank"].notna().all()
 
 
 def test_corrupt_file_gives_clear_error(fixture_copy: Path):
@@ -123,6 +163,13 @@ def test_app_runs_on_fixtures(monkeypatch, fixtures_dir: Path):
     assert not at.exception
     assert not at.error
     assert len(at.metric) == 4
+    assert any("is read from test data" in c.value for c in at.caption)
+
+
+def test_app_runs_with_light_basemap(monkeypatch, fixtures_dir: Path):
+    at = _run_app(monkeypatch, fixtures_dir)
+    at.sidebar.selectbox[0].set_value("Light grey (Esri)").run()
+    assert not at.exception
 
 
 @pytest.mark.parametrize("scenario", ["lane_aware", "population_only"])
