@@ -32,6 +32,28 @@
 | `edge_scores` | `scenario`, `edge_id`, `volume`, `score`, `rank` | Prioritized directed road edges |
 | `corridors` | `scenario`, `corridor_id`, `edge_ids`, `score`, `rank` | Merged road corridors |
 
+### Edge route volumes (`calculate_edge_route_volumes`)
+
+Intermediate output of step 1, one row per `(scenario, edge_id)` with volume > 0:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `scenario` | str | Scenario of the routes |
+| `edge_id` | str | Directed edge `u-v-key` |
+| `volume` | float | Sum of `trip_count` of routes traversing the edge in that direction |
+
+Rows are sorted by scenario, then volume (highest first), then `edge_id`.
+These are the first three fields of `edge_scores`; `score` and `rank` are added by `detect_gaps_and_score_edges`.
+
+Counting rules:
+
+1. **Direction**: `u-v-key` and `v-u-key` are different edges and are counted separately; edge IDs are never normalised.
+2. **Repeated use**: a route adds its `trip_count` once to each *distinct* edge it uses. A route that passes the same directed edge twice (possible in map-matched GPS traces) still counts once, so volume is the number of trips using the edge in that direction (design doc §7.1).
+3. **Scenarios** are aggregated independently.
+4. **Route types**: `synthetic` and `observed` routes of one scenario are summed; filter `route_type` beforehand if only one is wanted.
+5. Routes with no edges or `trip_count == 0` contribute nothing.
+6. `routes.edges` may be a list, a JSON array string, or a single edge-ID string.
+
 ---
 
 ## 3. How to Develop Independently

@@ -57,7 +57,8 @@ StationCandidatesSchema = DataFrameSchema(
             float, Check.greater_than_or_equal_to(0.0), nullable=True, coerce=True
         ),
         "score": Column(float, Check.greater_than_or_equal_to(0.0), nullable=False, coerce=True),
-        "rank": Column(int, Check.greater_than(0), nullable=True, coerce=True),
+        # nullable integer: unselected candidates have rank <NA>
+        "rank": Column("Int64", Check.greater_than(0), nullable=True, coerce=True),
     },
     strict=True,
     coerce=True,
