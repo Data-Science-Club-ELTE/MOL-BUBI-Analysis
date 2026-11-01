@@ -1,9 +1,10 @@
 """Interactive Streamlit + Folium dashboard for MOL Bubi recommendations.
 
-Week 1 skeleton: the layout follows ``WIREFRAME.md``. It reads the contract tables
-through :mod:`bubi.dashboard.data` (pipeline outputs or sample fixtures, never an
-external API) and shows a clear message instead of crashing when data is missing
-or invalid.
+The layout follows ``WIREFRAME.md``. It reads the contract tables through
+:mod:`bubi.dashboard.data` (pipeline outputs or sample fixtures, never an external
+API) and shows a clear message instead of crashing when data is missing or invalid.
+Week 2 draws the whole Budapest street network as one GeoJSON layer coloured by
+per-direction lane status, with a legend.
 
 Run with ``make dashboard``.
 """
@@ -11,28 +12,35 @@ Run with ``make dashboard``.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from pathlib import Path
+import os
+import time
+from dataclasses import dataclass, replace
+from html import escape
 
 import folium
+import geopandas as gpd
 import h3
+import numpy as np
 import pandas as pd
+import shapely
 import streamlit as st
+from branca.element import Element, MacroElement, Template
 from streamlit_folium import st_folium
 
 from bubi.dashboard.data import (
     BUDAPEST_CENTER,
-    DEFAULT_BBOX,
+    DATA_DIR_ENV,
     SCENARIOS,
     DashboardData,
     DashboardDataError,
     as_id_list,
     cell_center,
+    fixture_notes,
     for_scenario,
-    in_bbox,
     load_config,
     load_dashboard_data,
-    resolve_data_dir,
+    proposed_stations,
+    resolve_table_paths,
 )
 
 LANE_COLOR = "#2b8a3e"  # lane exists in this direction
@@ -42,6 +50,43 @@ STATION_COLOR = "#1c7ed6"
 PROPOSED_COLOR = "#2b8a3e"
 ROUTE_COLOR = "#7048e8"
 POPULATION_COLOR = "#f08c00"
+
+LANE_WEIGHT = 4
+NO_LANE_WEIGHT = 2.5
+# Both directions of a street share one geometry; each is drawn this far to the
+# right of its direction of travel so the two sit side by side.
+LANE_OFFSET_M = 4.0
+METRIC_CRS = "EPSG:32634"  # UTM zone 34N, metres, covers Budapest
+SIMPLIFY_M = 1.0
+# About 1 m. Rounding coordinates keeps the city-wide layer small enough to load quickly.
+COORD_PRECISION = 1e-5
+
+# Colours are picked in the browser, so the page carries no per-edge style data.
+LANE_STYLE_JS = (
+    "function (feature) {\n"
+    '  var lane = feature.properties.lane === "yes";\n'
+    "  return {\n"
+    f'    color: lane ? "{LANE_COLOR}" : "{NO_LANE_COLOR}",\n'
+    f"    weight: lane ? {LANE_WEIGHT} : {NO_LANE_WEIGHT},\n"
+    "    opacity: 0.85\n"
+    "  };\n"
+    "}"
+)
+
+# CartoDB basemaps now need an API key; both of these work without one.
+BASEMAPS = {
+    "OpenStreetMap": {"tiles": "OpenStreetMap"},
+    "Light grey (Esri)": {
+        "tiles": (
+            "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/"
+            "World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+        ),
+        "attr": "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, &copy; OpenStreetMap contributors",
+        # tiles stop at zoom 16; Leaflet scales them up beyond that
+        "max_native_zoom": 16,
+        "max_zoom": 19,
+    },
+}
 
 SCENARIO_HELP = {
     "baseline": "Existing Futár stations only.",
@@ -53,6 +98,7 @@ SCENARIO_HELP = {
 @dataclass
 class Settings:
     scenario: str
+    basemap: str
     show_stations: bool
     show_proposed: bool
     show_population: bool
@@ -66,13 +112,19 @@ class Settings:
 
 
 @st.cache_data(show_spinner="Loading data tables…")
-def _cached_load(data_dir: str, source: str, files_changed_at: float) -> DashboardData:
-    """Cached per folder; ``files_changed_at`` makes the cache reload after data changes."""
-    return load_dashboard_data(Path(data_dir), source)
+def _cached_load(data_dir_override: str | None, files_changed_at: float) -> DashboardData:
+    """Cached per data folder; ``files_changed_at`` makes the cache reload after data changes."""
+    return load_dashboard_data()
 
 
-def _latest_change(data_dir: Path) -> float:
-    return max((p.stat().st_mtime for p in data_dir.glob("*.parquet")), default=0.0)
+@st.cache_resource(show_spinner="Preparing the street layer…")
+def _cached_lane_geojson(data_dir_override: str | None, files_changed_at: float) -> str:
+    return lane_status_geojson(_cached_load(data_dir_override, files_changed_at).get("edges"))
+
+
+def _latest_change() -> float:
+    paths = [path for path, _ in resolve_table_paths().values() if path.exists()]
+    return max((path.stat().st_mtime for path in paths), default=0.0)
 
 
 def edge_ids_of_corridors(corridors: pd.DataFrame) -> set[str]:
@@ -113,21 +165,237 @@ def offset_line(
     return [(lat + off_lat, lon + off_lon) for lon, lat in coords]
 
 
-def map_center(stations: pd.DataFrame) -> tuple[float, float]:
-    if stations.empty:
-        return BUDAPEST_CENTER
-    return float(stations["lat"].mean()), float(stations["lon"].mean())
+def shift_right(lines: np.ndarray, distance: float) -> np.ndarray:
+    """Move every vertex of each line ``distance`` to the right of travel.
+
+    ``lines`` are LineStrings in a metric CRS. Each vertex moves along the average
+    right-hand normal of the segments next to it. On sharp bends the shift is a little
+    shorter than ``distance``, which is invisible at a few metres. This is about ten
+    times faster than ``shapely.offset_curve`` on a city-wide network.
+    """
+    coords, line_index = shapely.get_coordinates(lines, return_index=True)
+    segments = np.diff(coords, axis=0)
+    lengths = np.hypot(segments[:, 0], segments[:, 1])
+    # Skip the step from one line's last point to the next line's first, and repeated points.
+    real = (line_index[1:] == line_index[:-1]) & (lengths > 0)
+    unit = np.zeros_like(segments)
+    unit[real] = segments[real] / lengths[real, None]
+    right = np.column_stack([unit[:, 1], -unit[:, 0]])  # (dx, dy) turned 90° clockwise
+
+    normals = np.zeros_like(coords)
+    normals[:-1] += right  # each segment pushes its start point
+    normals[1:] += right  # and its end point
+    norms = np.hypot(normals[:, 0], normals[:, 1])
+    normals[norms > 0] /= norms[norms > 0, None]
+    # A point touching only zero-length segments takes the direction of its nearest
+    # neighbour on the same line; a line that is a single repeated point stays put.
+    normals[norms == 0] = np.nan
+    by_line = pd.DataFrame(normals).groupby(line_index)
+    normals = by_line.ffill().groupby(line_index).bfill().fillna(0.0).to_numpy()
+    return shapely.linestrings(coords + distance * normals, indices=line_index)
 
 
-def build_map(data: DashboardData, settings: Settings, bbox) -> tuple[folium.Map, list[str]]:
-    """Draw the enabled layers. Returns the map and notes about anything not drawn."""
+def lane_status_geojson(edges: gpd.GeoDataFrame | None) -> str:
+    """Every directed edge as GeoJSON text, grouped by lane status.
+
+    The result is a FeatureCollection with at most two features: ``{"lane": "yes"}`` holds
+    every direction that has a dedicated lane and ``{"lane": "no"}`` every direction that
+    has none, each as one MultiLineString. Two features instead of one per edge keep the
+    page small and let the browser draw the whole city at once.
+
+    Each edge (a LineString) is moved ``LANE_OFFSET_M`` to the right of travel so both
+    directions of a street stay visible, simplified to ``SIMPLIFY_M`` and rounded to
+    about 1 m.
+    """
+    features = []
+    if edges is not None and not edges.empty:
+        source = gpd.GeoSeries(edges.geometry.values, crs=edges.crs or "EPSG:4326")
+        simplified = source.to_crs(METRIC_CRS).simplify(SIMPLIFY_M)
+        shifted = shift_right(simplified.to_numpy(), LANE_OFFSET_M)
+        lines = (
+            gpd.GeoSeries(shifted, crs=METRIC_CRS)
+            .to_crs("EPSG:4326")
+            .set_precision(COORD_PRECISION, mode="pointwise")
+            .to_numpy()
+        )
+        has_lane = edges["has_dedicated_lane"].to_numpy(dtype=bool)
+        for lane, mask in (("yes", has_lane), ("no", ~has_lane)):
+            if not mask.any():
+                continue
+            geometry = shapely.to_geojson(shapely.multilinestrings(lines[mask]))
+            features.append(
+                f'{{"type":"Feature","properties":{{"lane":"{lane}"}},"geometry":{geometry}}}'
+            )
+    return '{"type":"FeatureCollection","features":[' + ",".join(features) + "]}"
+
+
+def stations_geojson(stations: pd.DataFrame) -> dict:
+    """Stations as GeoJSON points with ``station_id`` and ``name``."""
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {"station_id": str(station_id), "name": str(name)},
+                "geometry": {"type": "Point", "coordinates": [float(lon), float(lat)]},
+            }
+            for station_id, name, lat, lon in zip(
+                stations["station_id"], stations["name"], stations["lat"], stations["lon"]
+            )
+        ],
+    }
+
+
+def map_bounds(
+    stations: pd.DataFrame | None, edges: gpd.GeoDataFrame | None
+) -> list[list[float]] | None:
+    """South-west and north-east corners covering every station and edge, or None."""
+    lats: list[float] = []
+    lons: list[float] = []
+    if stations is not None and not stations.empty:
+        lats += [float(stations["lat"].min()), float(stations["lat"].max())]
+        lons += [float(stations["lon"].min()), float(stations["lon"].max())]
+    if edges is not None and not edges.empty:
+        lonlat = edges if edges.crs is None else edges.to_crs("EPSG:4326")
+        min_lon, min_lat, max_lon, max_lat = lonlat.total_bounds
+        lats += [float(min_lat), float(max_lat)]
+        lons += [float(min_lon), float(max_lon)]
+    if not lats:
+        return None
+    return [[min(lats), min(lons)], [max(lats), max(lons)]]
+
+
+# ---------------------------------------------------------------- legend
+
+
+def _line_swatch(color: str, weight: float) -> str:
+    return (
+        f'<span style="display:inline-block;width:22px;border-top:{weight}px solid {color};'
+        'vertical-align:middle"></span>'
+    )
+
+
+def _dot_swatch(color: str) -> str:
+    return (
+        '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
+        f"background:{color};border:1.5px solid #fff;box-shadow:0 0 0 1px {color};"
+        'vertical-align:middle"></span>'
+    )
+
+
+def _hexagon_swatch(color: str) -> str:
+    return f'<span style="color:{color};font-size:15px;vertical-align:middle">&#11042;</span>'
+
+
+def _area_swatch(color: str) -> str:
+    return (
+        f'<span style="display:inline-block;width:14px;height:10px;background:{color}66;'
+        f'border:1px solid {color};vertical-align:middle"></span>'
+    )
+
+
+def legend_html(entries: list[tuple[str, str]], note: str = "") -> str:
+    """HTML for the map legend: one row per (swatch HTML, label) pair, then an optional note."""
+    rows = "".join(
+        f'<div style="display:flex;align-items:center;gap:8px;margin:3px 0">'
+        f'<span style="width:22px;text-align:center">{swatch}</span>{escape(label)}</div>'
+        for swatch, label in entries
+    )
+    note_html = (
+        f'<div style="margin-top:6px;max-width:220px;color:#495057">{escape(note)}</div>'
+        if note
+        else ""
+    )
+    return (
+        '<div style="background:#fff;color:#212529;padding:8px 10px;border-radius:6px;'
+        'box-shadow:0 1px 4px rgba(0,0,0,.3);font:12px/1.35 system-ui,sans-serif">'
+        f'<div style="font-weight:600;margin-bottom:4px">Legend</div>{rows}{note_html}</div>'
+    )
+
+
+class MapLegend(MacroElement):
+    """A Leaflet control in the map's bottom-right corner holding :func:`legend_html`."""
+
+    _template = Template(
+        """
+        {% macro script(this, kwargs) %}
+        var {{ this.get_name() }} = L.control({position: "bottomright"});
+        {{ this.get_name() }}.onAdd = function () {
+            var div = L.DomUtil.create("div");
+            div.innerHTML = {{ this.html|tojson }};
+            L.DomEvent.disableScrollPropagation(div);
+            return div;
+        };
+        {{ this.get_name() }}.addTo({{ this._parent.get_name() }});
+        {% endmacro %}
+        """
+    )
+
+    def __init__(self, html: str) -> None:
+        super().__init__()
+        self._name = "MapLegend"
+        self.html = html
+
+
+class LaneStatusLayer(MacroElement):
+    """One Leaflet GeoJSON layer with every directed edge, coloured by lane status.
+
+    Takes the text from :func:`lane_status_geojson` and writes it into the page as is.
+    ``folium.GeoJson`` would parse and re-serialise it on every Streamlit rerun, which
+    takes seconds for a city-wide network. The layer does not react to the mouse:
+    checking 100,000+ lines on every mouse move makes the map lag.
+    """
+
+    _template = Template(
+        """
+        {% macro script(this, kwargs) %}
+        var {{ this.get_name() }} = L.geoJson({{ this.geojson }}, {
+            style: {{ this.style }},
+            interactive: false
+        }).addTo({{ this._parent.get_name() }});
+        {% endmacro %}
+        """
+    )
+
+    def __init__(self, geojson: str, name: str = "Bike-lane status") -> None:
+        super().__init__()
+        self._name = "LaneStatusLayer"
+        self.layer_name = name
+        self.geojson = geojson
+        self.style = LANE_STYLE_JS
+
+    def render(self, **kwargs) -> None:
+        # MacroElement.render wraps the finished script in a new Jinja template, which
+        # means re-parsing megabytes of coordinates on every rerun. Insert it as data.
+        script = Element("{{ this.code }}")
+        script.code = self._template.module.script(self, kwargs)
+        self.get_root().script.add_child(script, name=self.get_name())
+
+
+# ---------------------------------------------------------------- map
+
+
+def build_map(
+    data: DashboardData, settings: Settings, lane_geojson: str | None = None
+) -> tuple[folium.Map, list[str]]:
+    """Draw the enabled layers. Returns the map and notes about anything not drawn.
+
+    ``lane_geojson`` is the output of :func:`lane_status_geojson`; pass a cached copy to
+    avoid rebuilding it. The map opens zoomed to every station and edge.
+    """
     notes: list[str] = []
+    legend: list[tuple[str, str]] = []
     stations = data.get("stations")
     edges = data.get("edges")
     scenario = settings.scenario
 
-    # CartoDB basemaps now need an API key, so use plain OpenStreetMap tiles.
-    fmap = folium.Map(location=map_center(stations), zoom_start=14, tiles="OpenStreetMap")
+    # Canvas draws tens of thousands of lines much faster than one SVG element per line.
+    fmap = folium.Map(
+        location=BUDAPEST_CENTER, zoom_start=12, prefer_canvas=True, **BASEMAPS[settings.basemap]
+    )
+    bounds = map_bounds(stations, edges)
+    if bounds is not None:
+        fmap.fit_bounds(bounds)
 
     population = data.get("population")
     if settings.show_population and population is not None and not population.empty:
@@ -135,8 +403,7 @@ def build_map(data: DashboardData, settings: Settings, bbox) -> tuple[folium.Map
         max_pop = float(population["population"].max()) or 1.0
         skipped = 0
         for _, row in population.iterrows():
-            center = cell_center(row["cell_id"])
-            if center is None or not in_bbox(center[0], center[1], bbox):
+            if cell_center(row["cell_id"]) is None:
                 skipped += 1
                 continue
             folium.Polygon(
@@ -148,23 +415,17 @@ def build_map(data: DashboardData, settings: Settings, bbox) -> tuple[folium.Map
                 tooltip=f"Population: {row['population']:.0f}",
             ).add_to(layer)
         layer.add_to(fmap)
+        legend.append((_area_swatch(POPULATION_COLOR), "Population (darker = more people)"))
         if skipped:
-            notes.append(
-                f"{skipped} population cell(s) lie outside the study area and are not drawn."
-            )
+            notes.append(f"{skipped} population cell(s) have an invalid H3 id and are not drawn.")
 
     if settings.show_lanes and not edges.empty:
-        layer = folium.FeatureGroup(name="Bike-lane coverage")
-        for _, row in edges.iterrows():
-            has_lane = bool(row["has_dedicated_lane"])
-            folium.PolyLine(
-                offset_line(list(row.geometry.coords)),
-                color=LANE_COLOR if has_lane else NO_LANE_COLOR,
-                weight=4 if has_lane else 2.5,
-                opacity=0.85,
-                tooltip=f"Edge {row['edge_id']} · lane in this direction: {'yes' if has_lane else 'no'}",
-            ).add_to(layer)
-        layer.add_to(fmap)
+        geojson = lane_geojson if lane_geojson is not None else lane_status_geojson(edges)
+        fmap.add_child(LaneStatusLayer(geojson))
+        legend.append((_line_swatch(LANE_COLOR, LANE_WEIGHT), "Bike lane in this direction"))
+        legend.append(
+            (_line_swatch(NO_LANE_COLOR, NO_LANE_WEIGHT), "No bike lane in this direction")
+        )
 
     routes = for_scenario(data.get("routes"), scenario)
     if settings.show_routes and not routes.empty:
@@ -181,6 +442,7 @@ def build_map(data: DashboardData, settings: Settings, bbox) -> tuple[folium.Map
                 tooltip=f"Edge {row['edge_id']} · synthetic trips: {vol:.0f}",
             ).add_to(layer)
         layer.add_to(fmap)
+        legend.append((_line_swatch(ROUTE_COLOR, 5), "Synthetic trips (wider = more)"))
 
     corridors = for_scenario(data.get("corridors"), scenario)
     if settings.show_corridors and not corridors.empty:
@@ -205,29 +467,33 @@ def build_map(data: DashboardData, settings: Settings, bbox) -> tuple[folium.Map
                     ),
                 ).add_to(layer)
         layer.add_to(fmap)
+        legend.append((_line_swatch(GAP_COLOR, 6), "Priority corridor (missing lane)"))
 
     if settings.show_stations and not stations.empty:
-        layer = folium.FeatureGroup(name="Existing stations")
-        for _, row in stations.iterrows():
-            folium.CircleMarker(
-                location=[row["lat"], row["lon"]],
+        # One GeoJSON layer: a separate Folium marker per station adds about 1 s per rerun
+        # for Budapest's ~700 stations.
+        folium.GeoJson(
+            stations_geojson(stations),
+            name="Existing stations",
+            marker=folium.CircleMarker(
                 radius=6,
                 color="#ffffff",
                 weight=1.5,
                 fill=True,
                 fill_color=STATION_COLOR,
                 fill_opacity=0.95,
-                tooltip=f"{row['name']} ({row['station_id']})",
-            ).add_to(layer)
-        layer.add_to(fmap)
+            ),
+            tooltip=folium.GeoJsonTooltip(fields=["name", "station_id"], aliases=["Station", "ID"]),
+        ).add_to(fmap)
+        legend.append((_dot_swatch(STATION_COLOR), "Existing station"))
 
-    candidates = for_scenario(data.get("station_candidates"), scenario)
+    candidates = proposed_stations(data, scenario)
     if settings.show_proposed and not candidates.empty:
         layer = folium.FeatureGroup(name="Proposed stations")
         skipped = 0
         for _, row in candidates.iterrows():
             center = cell_center(row["cell_id"])
-            if center is None or not in_bbox(center[0], center[1], bbox):
+            if center is None:
                 skipped += 1
                 continue
             folium.RegularPolygonMarker(
@@ -244,11 +510,18 @@ def build_map(data: DashboardData, settings: Settings, bbox) -> tuple[folium.Map
                 ),
             ).add_to(layer)
         layer.add_to(fmap)
+        legend.append((_hexagon_swatch(PROPOSED_COLOR), "Proposed station (H3 cell centre)"))
         if skipped:
-            notes.append(
-                f"{skipped} proposed station(s) have an H3 cell outside the study area and are not drawn."
-            )
+            notes.append(f"{skipped} proposed station(s) have an invalid H3 id and are not drawn.")
 
+    if legend:
+        note = ""
+        if settings.show_lanes:
+            note = (
+                "Each direction of a street is drawn on the right-hand side of travel, so a "
+                "two-way street shows two lines."
+            )
+        fmap.add_child(MapLegend(legend_html(legend, note)))
     return fmap, notes
 
 
@@ -260,7 +533,11 @@ def render_header(data: DashboardData | None) -> None:
     left.title("🚲 MOL Bubi Bike-Lane & Station Recommendation Tool")
     if data is None:
         return
-    source = "sample fixtures" if data.source == "fixtures" else "pipeline outputs"
+    source = {
+        "fixtures": "sample fixtures",
+        "processed": "pipeline outputs",
+        "mixed": "pipeline outputs + sample fixtures",
+    }[data.source]
     right.warning(f"**Synthetic demo data** (D5) · {source}")
 
 
@@ -281,6 +558,11 @@ def render_sidebar(config: dict) -> Settings:
     sidebar.header("Map layers")
     settings = Settings(
         scenario=scenario,
+        basemap=sidebar.selectbox(
+            "Basemap",
+            options=list(BASEMAPS),
+            help="The light grey basemap makes the lane colours easier to read on a projector.",
+        ),
         show_stations=sidebar.checkbox("Existing stations", value=True),
         show_proposed=sidebar.checkbox("Proposed stations", value=True),
         show_population=sidebar.checkbox("Population (H3 cells)", value=False),
@@ -309,7 +591,7 @@ def render_sidebar(config: dict) -> Settings:
 
 def render_metrics(data: DashboardData, scenario: str) -> None:
     stations = data.get("stations")
-    candidates = for_scenario(data.get("station_candidates"), scenario)
+    candidates = proposed_stations(data, scenario)
     corridors = for_scenario(data.get("corridors"), scenario)
     routes = for_scenario(data.get("routes"), scenario)
     edges = data.get("edges")
@@ -344,13 +626,27 @@ def render_detail_panel(map_state: dict | None) -> None:
     )
 
 
-def render_scenario_comparison(data: DashboardData) -> None:
+def render_scenario_comparison(data: DashboardData, settings: Settings) -> None:
     st.subheader("Scenario comparison")
     st.caption(
-        "Week 5: small maps per scenario, demand per newly served person, people served per km "
+        "One map per scenario with the layers selected in the sidebar, except the street "
+        "network: drawing every street four times would slow the page down, so it appears on "
+        "the main map only. Week 5 adds demand per newly served person, people served per km "
         "of new corridor, and robust vs station-dependent corridors. Counts below come from the "
         "loaded tables."
     )
+    for column, scenario in zip(st.columns(len(SCENARIOS)), SCENARIOS):
+        with column:
+            st.markdown(f"**{scenario}**")
+            fmap, _ = build_map(data, replace(settings, scenario=scenario, show_lanes=False))
+            st_folium(
+                fmap,
+                height=300,
+                use_container_width=True,
+                returned_objects=[],
+                key=f"comparison_map_{scenario}",
+            )
+
     rows = []
     for scenario in SCENARIOS:
         corridors = for_scenario(data.get("corridors"), scenario)
@@ -358,7 +654,7 @@ def render_scenario_comparison(data: DashboardData) -> None:
         rows.append(
             {
                 "scenario": scenario,
-                "proposed stations": len(for_scenario(data.get("station_candidates"), scenario)),
+                "proposed stations": len(proposed_stations(data, scenario)),
                 "corridors": len(corridors),
                 "synthetic trips": float(routes["trip_count"].sum()) if not routes.empty else 0.0,
             }
@@ -389,6 +685,7 @@ def render_tables(data: DashboardData, scenario: str) -> None:
             st.write("No proposed stations in this scenario.")
         else:
             table = candidates.sort_values("rank")
+            st.caption("Candidates without a rank were not selected as new stations.")
             st.dataframe(table, hide_index=True, width="stretch")
             st.download_button(
                 "📥 Export station candidates (CSV)",
@@ -419,12 +716,11 @@ def main() -> None:
         layout="wide",
     )
     config = load_config()
-    bbox = tuple(config.get("spatial", {}).get("study_area_bbox") or DEFAULT_BBOX)
     settings = render_sidebar(config)
 
+    cache_key = (os.environ.get(DATA_DIR_ENV), _latest_change())
     try:
-        data_dir, source = resolve_data_dir()
-        data = _cached_load(str(data_dir), source, _latest_change(data_dir))
+        data = _cached_load(*cache_key)
     except DashboardDataError as err:
         render_header(None)
         st.error(f"**The dashboard cannot start because of a data problem.**\n\n{err}")
@@ -436,21 +732,24 @@ def main() -> None:
 
     render_metrics(data, settings.scenario)
 
-    map_col, detail_col = st.columns([3, 1])
-    with map_col:
-        fmap, notes = build_map(data, settings, bbox)
-        map_state = st_folium(
-            fmap,
-            height=520,
-            use_container_width=True,
-            returned_objects=["last_object_clicked_tooltip"],
-        )
-        for note in notes:
-            st.caption(f"⚠️ {note}")
-    with detail_col:
-        render_detail_panel(map_state)
+    started = time.perf_counter()
+    lane_geojson = _cached_lane_geojson(*cache_key) if settings.show_lanes else None
+    fmap, notes = build_map(data, settings, lane_geojson)
+    map_state = st_folium(
+        fmap,
+        height=560,
+        use_container_width=True,
+        returned_objects=["last_object_clicked_tooltip"],
+    )
+    st.caption(
+        f"{len(data.get('edges')):,} directed street edges · map prepared on the server in "
+        f"{time.perf_counter() - started:.1f} s (the browser needs extra time to draw it)."
+    )
+    for note in fixture_notes(data) + notes:
+        st.caption(f"⚠️ {note}")
+    render_detail_panel(map_state)
 
-    render_scenario_comparison(data)
+    render_scenario_comparison(data, settings)
     render_tables(data, settings.scenario)
 
 
