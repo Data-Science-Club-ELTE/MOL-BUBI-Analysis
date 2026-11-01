@@ -1,7 +1,10 @@
 """Smoke tests checking module interfaces and isolation."""
 
+from pathlib import Path
+
 import pytest
 
+from bubi.contracts.schemas import StationsSchema
 from bubi.ingestion import ingest_futar_stations
 from bubi.network import build_street_network
 from bubi.profiling import profile_dataset
@@ -28,10 +31,12 @@ def test_profiling_stub(sample_stations):
     assert "station_id" in summary["columns"]
 
 
-def test_module_stubs_raise_not_implemented():
-    with pytest.raises(NotImplementedError):
-        ingest_futar_stations()
+def test_ingestion_interface_returns_stations_table(fixtures_dir: Path):
+    df = ingest_futar_stations(raw_path=fixtures_dir / "futar_bicycle_rental_sample.json")
+    StationsSchema.validate(df)
 
+
+def test_module_stubs_raise_not_implemented():
     with pytest.raises(NotImplementedError):
         build_street_network((19.0, 47.4, 19.1, 47.5))
 

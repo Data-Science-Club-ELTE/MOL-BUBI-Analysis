@@ -20,6 +20,9 @@ lint:
 format:
 	$(PYTHON) -m ruff format .
 
+run-pipeline:
+	$(PYTHON) scripts/run_pipeline.py $(PIPELINE_ARGS)
+
 dashboard:
 	$(PYTHON) -m streamlit run src/bubi/dashboard/app.py
 

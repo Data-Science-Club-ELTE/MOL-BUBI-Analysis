@@ -1,9 +1,29 @@
-"""Gravity-style synthetic trip demand generator."""
+"""Gravity-style synthetic trip demand generator.
 
-import math
+Model (see docs/gravity_model_spec.md):
+
+    T_ij = C * P_i * P_j * exp(-beta * d_ij)        for i != j
+    sum_ij T_ij = k * sum_i P_i                      (fixes C)
+
+P_i is the catchment population of station i, d_ij is the straight-line distance in
+metres (EPSG:23700) between stations i and j. The output is an *expected* trip count,
+so it is deterministic; ``random_seed`` is kept in the signature for the day a sampling
+step is added.
+"""
+
+from __future__ import annotations
 
 import h3
+import numpy as np
 import pandas as pd
+from pyproj import Transformer
+
+_TO_EOV = Transformer.from_crs("EPSG:4326", "EPSG:23700", always_xy=True)
+
+
+def _project(lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
+    x, y = _TO_EOV.transform(lon, lat)
+    return np.column_stack([x, y])
 
 from bubi.contracts.schemas import PopulationSchema, StationsSchema, TripMatrixSchema
 
@@ -28,42 +48,30 @@ def assign_catchment_population(
 ) -> pd.DataFrame:
     """Assign H3 population cells to their nearest station within the walk threshold.
 
+    Each H3 cell goes to exactly one station: the nearest one by centroid distance.
+    Cells farther than ``walk_threshold_m`` from every station are unserved and dropped.
+
     Returns:
         pd.DataFrame with columns: station_id, catchment_population
+        (one row per station, 0.0 if nobody is assigned).
     """
-    stations = StationsSchema.validate(df_stations)
-    population = PopulationSchema.validate(df_population)
-    if not math.isfinite(walk_threshold_m) or walk_threshold_m < 0:
-        raise ValueError("walk_threshold_m must be a finite non-negative value")
+    stations = df_stations.reset_index(drop=True)
+    if df_population.empty:
+        return pd.DataFrame({"station_id": stations["station_id"], "catchment_population": 0.0})
 
-    totals = dict.fromkeys(stations["station_id"], 0.0)
-    station_rows = stations[["station_id", "lat", "lon"]].to_dict("records")
-    for cell_id, cell_population in population[["cell_id", "population"]].itertuples(
-        index=False, name=None
-    ):
-        cell_lat, cell_lon = h3.cell_to_latlng(cell_id)
-        nearest_station = min(
-            station_rows,
-            key=lambda station: _haversine_distance_m(
-                cell_lat, cell_lon, station["lat"], station["lon"]
-            ),
-            default=None,
-        )
-        if nearest_station is not None:
-            distance_m = _haversine_distance_m(
-                cell_lat,
-                cell_lon,
-                nearest_station["lat"],
-                nearest_station["lon"],
-            )
-            if distance_m <= walk_threshold_m:
-                totals[nearest_station["station_id"]] += float(cell_population)
+    centers = np.array([h3.cell_to_latlng(c) for c in df_population["cell_id"]])
+    cell_xy = _project(centers[:, 1], centers[:, 0])
+    st_xy = _project(stations["lon"].to_numpy(), stations["lat"].to_numpy())
 
+    dist = np.linalg.norm(cell_xy[:, None, :] - st_xy[None, :, :], axis=2)  # cells x stations
+    nearest = dist.argmin(axis=1)
+    served = dist[np.arange(len(dist)), nearest] <= walk_threshold_m
+
+    pop = df_population["population"].to_numpy(dtype=float)
+    totals = np.zeros(len(stations))
+    np.add.at(totals, nearest[served], pop[served])
     return pd.DataFrame(
-        {
-            "station_id": list(totals),
-            "catchment_population": list(totals.values()),
-        }
+        {"station_id": stations["station_id"].astype(str), "catchment_population": totals}
     )
 
 
@@ -74,6 +82,7 @@ def generate_synthetic_trips(
     k_scaling: float = 0.05,
     beta_decay: float = DEFAULT_BETA_DECAY,
     random_seed: int = 42,
+    walk_threshold_m: float = 350.0,
 ) -> pd.DataFrame:
     """Generate station-to-station synthetic trip demand using a gravity model.
 
@@ -81,93 +90,38 @@ def generate_synthetic_trips(
         trips(i -> j) proportional to P_i * P_j * exp(-beta * d_ij)
         Total demand = k * sum(P_i)
 
-    Args:
-        df_stations: Stations table adhering to StationsSchema.
-        df_population: Population table adhering to PopulationSchema.
-        scenario: 'baseline', 'lane_aware', or 'population_only'.
-        k_scaling: Global demand scaling factor.
-        beta_decay: Exponential distance decay parameter.
-        random_seed: Seed for reproducibility.
+    ``df_stations`` must already hold the scenario's full station set (existing plus any
+    proposed ``new:<cell_id>`` stations); this function does not pick stations.
 
     Returns:
         pd.DataFrame adhering to TripMatrixSchema.
     """
-    stations = StationsSchema.validate(df_stations)
-    if not math.isfinite(k_scaling) or k_scaling < 0:
-        raise ValueError("k_scaling must be a finite non-negative value")
-    if not math.isfinite(beta_decay) or beta_decay <= 0:
-        raise ValueError("beta_decay must be a finite positive value")
+    del random_seed  # expected-value model: no randomness yet
+    cols = ["scenario", "start_station_id", "end_station_id", "trip_count"]
 
-    catchments = assign_catchment_population(df_stations, df_population)
-    station_data = stations.merge(catchments, on="station_id", validate="one_to_one")
-    station_data = station_data[station_data["catchment_population"] > 0].reset_index(drop=True)
-    empty = pd.DataFrame(
-        columns=["scenario", "start_station_id", "end_station_id", "trip_count"]
+    catch = assign_catchment_population(df_stations, df_population, walk_threshold_m)
+    stations = df_stations.reset_index(drop=True).copy()
+    stations["station_id"] = stations["station_id"].astype(str)
+    stations = stations.merge(catch, on="station_id")
+    stations = stations[stations["catchment_population"] > 0].reset_index(drop=True)
+    if len(stations) < 2:
+        return pd.DataFrame(columns=cols)
+
+    p = stations["catchment_population"].to_numpy()
+    xy = _project(stations["lon"].to_numpy(), stations["lat"].to_numpy())
+    d = np.linalg.norm(xy[:, None, :] - xy[None, :, :], axis=2)
+
+    weights = np.outer(p, p) * np.exp(-beta_decay * d)
+    np.fill_diagonal(weights, 0.0)  # no same-station trips
+    trips = weights * (k_scaling * p.sum() / weights.sum())
+
+    i, j = np.nonzero(trips)
+    out = pd.DataFrame(
+        {
+            "scenario": scenario,
+            "start_station_id": stations["station_id"].to_numpy()[i],
+            "end_station_id": stations["station_id"].to_numpy()[j],
+            "trip_count": trips[i, j],
+        }
     )
-    if len(station_data) < 2:
-        return empty
-
-    population = station_data["catchment_population"].tolist()
-    station_rows = station_data[["station_id", "lat", "lon"]].to_dict("records")
-    weighted_pairs = []
-    for origin_index, origin in enumerate(station_rows):
-        for destination_index, destination in enumerate(station_rows):
-            if origin_index == destination_index:
-                continue
-            distance_m = _haversine_distance_m(
-                origin["lat"], origin["lon"], destination["lat"], destination["lon"]
-            )
-            weight = (
-                population[origin_index]
-                * population[destination_index]
-                * math.exp(-beta_decay * distance_m)
-            )
-            if weight > 0:
-                weighted_pairs.append(
-                    (origin["station_id"], destination["station_id"], distance_m, weight)
-                )
-
-    total_weight = sum(pair[3] for pair in weighted_pairs)
-    total_demand = k_scaling * sum(population)
-    if total_weight <= 0 or total_demand <= 0:
-        return empty
-
-    result = pd.DataFrame(
-        [
-            {
-                "scenario": scenario,
-                "start_station_id": origin_id,
-                "end_station_id": destination_id,
-                "trip_count": total_demand * weight / total_weight,
-            }
-            for origin_id, destination_id, _, weight in weighted_pairs
-        ]
-    )
-    return TripMatrixSchema.validate(result)
-
-
-def demand_weighted_mean_trip_distance(
-    df_trips: pd.DataFrame, df_stations: pd.DataFrame
-) -> float:
-    """Return the trip-count-weighted mean straight-line distance in metres."""
-    trips = TripMatrixSchema.validate(df_trips)
-    stations = StationsSchema.validate(df_stations)
-    if trips.empty or trips["trip_count"].sum() <= 0:
-        raise ValueError("cannot compute mean distance for an empty trip matrix")
-
-    coordinates = stations.set_index("station_id")[["lat", "lon"]]
-    weighted_distance = 0.0
-    for origin_id, destination_id, trip_count in trips[
-        ["start_station_id", "end_station_id", "trip_count"]
-    ].itertuples(index=False, name=None):
-        try:
-            origin = coordinates.loc[origin_id]
-            destination = coordinates.loc[destination_id]
-        except KeyError as error:
-            raise ValueError(f"trip matrix references unknown station: {error.args[0]}") from error
-        distance_m = _haversine_distance_m(
-            origin["lat"], origin["lon"], destination["lat"], destination["lon"]
-        )
-        weighted_distance += float(trip_count) * distance_m
-
-    return weighted_distance / float(trips["trip_count"].sum())
+    return out[cols].reset_index(drop=True)

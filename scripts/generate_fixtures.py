@@ -12,6 +12,7 @@ import pandas as pd
 from shapely.geometry import LineString
 
 from bubi.contracts.io import save_contract_table
+from bubi.demand.gravity import generate_synthetic_trips
 
 
 def generate_all_fixtures(output_dir: Path) -> None:
@@ -281,28 +282,11 @@ def generate_all_fixtures(output_dir: Path) -> None:
     df_corridors = pd.DataFrame(corridors_data)
     save_contract_table(df_corridors, "corridors", output_dir / "sample_corridors.parquet")
 
-    # Trip Matrix handoff interface
-    trip_matrix_data = [
-        {
-            "scenario": "baseline",
-            "start_station_id": "futar_001",
-            "end_station_id": "futar_002",
-            "trip_count": 120.0,
-        },
-        {
-            "scenario": "baseline",
-            "start_station_id": "futar_002",
-            "end_station_id": "futar_001",
-            "trip_count": 115.0,
-        },
-        {
-            "scenario": "baseline",
-            "start_station_id": "futar_001",
-            "end_station_id": "futar_003",
-            "trip_count": 210.0,
-        },
-    ]
-    df_trip_matrix = pd.DataFrame(trip_matrix_data)
+    # Trip Matrix handoff interface: produced by the gravity model itself (baseline scenario),
+    # so the fixture always matches the documented formula and default parameters.
+    df_trip_matrix = generate_synthetic_trips(
+        df_stations, df_population, scenario="baseline", k_scaling=0.05, beta_decay=0.0015
+    )
     save_contract_table(df_trip_matrix, "trip_matrix", output_dir / "sample_trip_matrix.parquet")
 
     print(f"All 7 contract tables + trip matrix generated successfully in {output_dir}.")

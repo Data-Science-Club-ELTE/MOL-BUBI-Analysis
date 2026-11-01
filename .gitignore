@@ -45,3 +45,6 @@ data/interim/
 .ruff_cache/
 .coverage
 htmlcov/
+
+# Secrets
+.env
