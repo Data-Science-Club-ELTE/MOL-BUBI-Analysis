@@ -10,6 +10,7 @@ Run with ``make dashboard``.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 from dataclasses import dataclass, replace
@@ -399,6 +400,18 @@ def render_scenario_comparison(data: DashboardData, settings: Settings) -> None:
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
 
+def export_csv(table: pd.DataFrame) -> bytes:
+    """A table as UTF-8 CSV for download.
+
+    ``edge_ids`` is written as a JSON array, the contract's string form. A list read
+    back from Parquet is a NumPy array, and pandas would otherwise write it as
+    ``['a-b-0' 'b-c-0']``, which spreadsheets and other tools cannot parse.
+    """
+    if "edge_ids" in table:
+        table = table.assign(edge_ids=table["edge_ids"].map(lambda v: json.dumps(as_id_list(v))))
+    return table.to_csv(index=False).encode("utf-8")
+
+
 def render_tables(data: DashboardData, scenario: str) -> None:
     corridors = for_scenario(data.get("corridors"), scenario)
     candidates = for_scenario(data.get("station_candidates"), scenario)
@@ -412,7 +425,7 @@ def render_tables(data: DashboardData, scenario: str) -> None:
             st.dataframe(table, hide_index=True, width="stretch")
             st.download_button(
                 "📥 Export corridors (CSV)",
-                table.to_csv(index=False).encode("utf-8"),
+                export_csv(table),
                 f"corridors_{scenario}.csv",
                 "text/csv",
             )
@@ -426,7 +439,7 @@ def render_tables(data: DashboardData, scenario: str) -> None:
             st.dataframe(table, hide_index=True, width="stretch")
             st.download_button(
                 "📥 Export station candidates (CSV)",
-                table.to_csv(index=False).encode("utf-8"),
+                export_csv(table),
                 f"station_candidates_{scenario}.csv",
                 "text/csv",
             )
@@ -452,7 +465,11 @@ def main() -> None:
         page_icon="🚲",
         layout="wide",
     )
-    config = load_config()
+    try:
+        config = load_config()
+    except DashboardDataError as err:
+        st.warning(str(err))
+        config = {}
     settings = render_sidebar(config)
 
     try:
