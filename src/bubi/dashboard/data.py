@@ -158,12 +158,29 @@ def fixture_notes(data: DashboardData) -> list[str]:
 
 
 def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
-    """Read the project config; the dashboard still runs with defaults if it is missing."""
+    """Read the project config. A missing file gives ``{}``, so the dashboard uses defaults.
+
+    Raises:
+        DashboardDataError: if the file exists but cannot be read or is not a YAML mapping,
+            so the app can say so instead of silently falling back to defaults.
+    """
     try:
         with open(path, encoding="utf-8") as handle:
-            return yaml.safe_load(handle) or {}
-    except (OSError, yaml.YAMLError):
+            config = yaml.safe_load(handle)
+    except FileNotFoundError:
         return {}
+    except (OSError, yaml.YAMLError) as err:
+        raise DashboardDataError(
+            f"The config file `{path}` could not be read ({type(err).__name__}: "
+            f"{_first_lines(err, max_lines=1)}). Using default settings."
+        ) from err
+    if config is None:
+        return {}
+    if not isinstance(config, dict):
+        raise DashboardDataError(
+            f"The config file `{path}` is not a YAML mapping. Using default settings."
+        )
+    return config
 
 
 def for_scenario(df: pd.DataFrame | None, scenario: str) -> pd.DataFrame:
