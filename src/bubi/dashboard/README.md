@@ -141,5 +141,65 @@ page for only 20,000 edges.
 
 - The street layer has no hover tooltip; the legend explains the colours. Corridors keep their
   tooltips with edge ID, rank and score.
-- Routes, corridors and population cells are still drawn one object each. That is fine for the top
-  corridors, but the routes and population layers may need the same treatment at city scale.
+- Corridors and population cells are still drawn one object each. That is fine for the top
+  corridors, but the population layer may need the same treatment at city scale. Routes are
+  handled in week 3 (section 6).
+
+---
+
+## 6. Week 3: Route Volume Layer
+
+Switch on **Synthetic routes** in the sidebar to see how many trips use each street, in each
+direction. The layer reads `routes` and `edges` and shows the active scenario.
+
+### What the layer shows
+
+| What | How |
+|---|---|
+| Volume | Trips per directed edge from `calculate_edge_route_volumes()` in `bubi.corridors.scoring`, so the map and corridor scoring count the same way: a route that uses an edge twice counts once. |
+| Colour and width | Volumes are split into up to four classes at their quartiles. Each class is one step of a single violet ramp, light and thin for few trips, dark and wide for many. The legend shows the smallest and largest volume in each class. |
+| Direction | Each direction is drawn 10 m to the right of travel, outside the 4 m lane lines, so `u-v-key` and `v-u-key` appear side by side and neither hides the lane colour. The legend states the convention. |
+| Tooltip | Hovering an edge shows the data label, edge ID, direction (`node u → v` and an eight-point compass heading), trip count, and whether that direction has a bike lane. |
+| Data label | When every route is `synthetic`, the tooltip and the legend say "Synthetic demo data (D5): not observed cycling". Observed or mixed routes are labelled as such. |
+| Toggle | The layer is built once per scenario and data version (`st.cache_resource`), so switching it off and on or changing scenario back does not rebuild it. |
+
+Only edges with at least one trip are drawn. The scenario comparison maps leave the layer out, for
+the same reason as the street layer.
+
+If the `routes` table cannot be counted (for example a negative `trip_count`), the layer is left
+out and a note under the map gives the reason. Route edges that are missing from `edges` are
+counted in a note too.
+
+### Page format
+
+The layer is sent to the browser as compact JSON with one array per field (`id`, `volume`,
+`heading`, `lane`, `step`, `coords`) and drawn by `RouteVolumeLayer`. Tooltip text is built only
+when an edge is hovered. On a city-sized network this page is about a third of the size of GeoJSON
+with per-edge properties (35.9 MB instead of 76.9 MB at 200,000 edges with routes).
+
+### Load time
+
+The real Budapest network and routes are not in the repository yet. These numbers use the
+synthetic network from section 5 plus 20,000 synthetic routes of 50 random edges each
+(`synthetic_routes()` in the script). That touches almost every edge, so it is close to a worst case
+for this layer.
+
+```bash
+make measure-dashboard MEASURE_ARGS="--n-routes 20000"
+make measure-dashboard MEASURE_ARGS="--n-edges 300000 --n-routes 20000"
+```
+
+Taken on a laptop (AMD Ryzen 7 8845HS). "Browser" is the time from opening the page in headless
+Firefox until the first frame after the map script has run, with the street layer and stations
+also on. A page with only the fixtures takes about 1.0 s on the same measure, mostly loading
+Leaflet and the other scripts.
+
+| Directed edges | Edges with trips | Build route layer (once) | Page size, lanes + routes | Browser |
+|---:|---:|---:|---:|---:|
+| 100,000 | 99,997 | 1.6 s | 18.1 MB | 4.0–4.1 s |
+| 200,000 | 198,687 | 2.8 s | 35.9 MB | 6.4–6.6 s |
+| 300,000 | 289,331 | 3.9 s | 53.0 MB | not measured |
+
+With only the street layer, the 200,000-edge page takes 3.1–3.3 s on the same measure, so the route
+layer adds about 3.3 s at that size. Hover response on a city-sized layer has not been measured;
+check it in a browser once the real network is merged.

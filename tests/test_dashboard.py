@@ -18,16 +18,22 @@ from streamlit.testing.v1 import AppTest
 from bubi.dashboard.app import (
     LANE_COLOR,
     NO_LANE_COLOR,
+    ROUTE_FIELDS,
+    ROUTE_WEIGHTS,
     LaneStatusLayer,
     MapLegend,
+    RouteVolumeLayer,
     Settings,
     build_map,
+    compass_headings,
     lane_status_geojson,
     legend_html,
     map_bounds,
     offset_line,
+    route_volume_layer,
     route_volume_per_edge,
     shift_right,
+    volume_classes,
 )
 from bubi.dashboard.data import (
     DATA_DIR_ENV,
@@ -427,3 +433,158 @@ def test_app_shows_error_instead_of_crashing(monkeypatch, fixture_copy: Path):
     at = _run_app(monkeypatch, fixture_copy)
     assert not at.exception
     assert at.error and "`edges` table is missing" in at.error[0].value
+
+
+# ---------------------------------------------------------------- week 3: route volume
+
+
+def street_routes(forward_trips: float, back_trips: float, **extra) -> pd.DataFrame:
+    """Baseline routes along the two directions of two_way_street()."""
+    return pd.DataFrame(
+        {
+            "scenario": ["baseline", "baseline"],
+            "start_station_id": ["s1", "s2"],
+            "end_station_id": ["s2", "s1"],
+            "route_type": ["synthetic", "synthetic"],
+            "edges": [["a-b-0"], ["b-a-0"]],
+            "trip_count": [forward_trips, back_trips],
+            **extra,
+        }
+    )
+
+
+def features_by_edge(layer) -> dict[str, dict]:
+    """route_volume_layer's column arrays, regrouped into one dict per edge."""
+    data = json.loads(layer.data)
+    rows = zip(*(data[field] for field in ROUTE_FIELDS))
+    return {row[0]: dict(zip(ROUTE_FIELDS, row)) for row in rows}
+
+
+def test_route_volume_counts_a_repeated_edge_once():
+    routes = street_routes(10, 5).assign(edges=[["a-b-0", "a-b-0"], ["b-a-0"]])
+    assert route_volume_per_edge(routes)["a-b-0"] == 10.0
+
+
+def test_volume_classes_split_at_quartiles_and_label_real_ranges():
+    classes, labels = volume_classes(np.array([1.0, 2.0, 3.0, 4.0, 100.0]))
+    assert classes.tolist() == [0, 0, 1, 2, 3]
+    assert labels == ["1–2", "3", "4", "100"]
+
+
+def test_volume_classes_skip_quartiles_with_no_volume_between_them():
+    classes, labels = volume_classes(np.array([20.0, 300.0]))
+    assert classes.tolist() == [0, 1]
+    assert labels == ["20", "300"]
+
+
+def test_volume_class_labels_never_round_small_volumes_to_zero():
+    _, labels = volume_classes(np.array([0.3, 0.4, 2.0, 2.5, 12.4, 1234.0]))
+    assert labels[0].startswith("0.3")
+    assert labels[-1].endswith("1,234")
+
+
+def test_volume_classes_of_one_value_is_one_class():
+    classes, labels = volume_classes(np.array([7.0, 7.0]))
+    assert classes.tolist() == [0, 0]
+    assert labels == ["7"]
+
+
+def test_route_layer_has_one_feature_per_used_direction():
+    layer = route_volume_layer(two_way_street(False, False), street_routes(300, 20))
+    features = features_by_edge(layer)
+    assert set(features) == {"a-b-0", "b-a-0"}
+    assert features["a-b-0"]["volume"] == 300
+    assert features["b-a-0"]["volume"] == 20
+    assert layer.n_edges == 2
+
+
+def test_route_layer_colour_and_width_grow_with_volume():
+    features = features_by_edge(
+        route_volume_layer(two_way_street(False, False), street_routes(300, 20))
+    )
+    busy, quiet = features["a-b-0"]["step"], features["b-a-0"]["step"]
+    assert busy > quiet  # later steps are darker in ROUTE_RAMP and wider in ROUTE_WEIGHTS
+    assert ROUTE_WEIGHTS[busy] > ROUTE_WEIGHTS[quiet]
+
+
+def test_route_layer_draws_each_direction_on_its_right_side():
+    features = features_by_edge(
+        route_volume_layer(two_way_street(False, False), street_routes(300, 20))
+    )
+    street_lat = 47.497
+    # east-bound a->b sits south of the street, west-bound b->a north of it
+    assert all(lat < street_lat for lat in features["a-b-0"]["coords"][1::2])
+    assert all(lat > street_lat for lat in features["b-a-0"]["coords"][1::2])
+
+
+def test_route_tooltip_fields_give_direction_and_lane_status():
+    features = features_by_edge(
+        route_volume_layer(two_way_street(True, False), street_routes(300, 20))
+    )
+    forward, back = features["a-b-0"], features["b-a-0"]
+    assert (forward["heading"], back["heading"]) == ("E", "W")
+    assert (forward["lane"], back["lane"]) == (1, 0)
+
+
+def test_compass_headings():
+    lines = np.array(
+        [
+            LineString([(0, 0), (0, 10)]),
+            LineString([(0, 0), (10, 10)]),
+            LineString([(0, 0), (0, -10)]),
+            LineString([(0, 0), (-10, 0)]),
+        ]
+    )
+    assert compass_headings(lines).tolist() == ["N", "NE", "S", "W"]
+
+
+def test_route_layer_is_labelled_synthetic():
+    layer = route_volume_layer(two_way_street(False, False), street_routes(300, 20))
+    assert "Synthetic" in layer.label and "D5" in layer.label
+
+
+def test_route_layer_labels_observed_routes_honestly():
+    routes = street_routes(300, 20).assign(route_type=["observed", "synthetic"])
+    layer = route_volume_layer(two_way_street(False, False), routes)
+    assert layer.label == "Synthetic + observed routes"
+
+
+def test_route_layer_notes_edges_missing_from_the_network():
+    routes = street_routes(300, 20).assign(edges=[["a-b-0"], ["x-y-0"]])
+    layer = route_volume_layer(two_way_street(False, False), routes)
+    assert set(features_by_edge(layer)) == {"a-b-0"}
+    assert any("1 edge(s)" in note for note in layer.notes)
+
+
+def test_route_layer_turns_bad_routes_into_a_note():
+    layer = route_volume_layer(two_way_street(False, False), street_routes(-5, 20))
+    assert layer.legend == []
+    assert any("could not be computed" in note for note in layer.notes)
+
+
+def test_route_layer_on_the_map_shows_label_tooltip_and_legend(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    fmap, _ = build_map(data, replace(ALL_LAYERS, show_routes=True))
+    assert len(layers_of(fmap, RouteVolumeLayer)) == 1
+    html = fmap.get_root().render()
+    assert "bindTooltip" in html
+    assert "Synthetic demo data (D5)" in html
+    for field in ("Edge ", "Direction: ", "Trips: ", "Bike lane in this direction: "):
+        assert field in html
+    assert "trips" in layers_of(fmap, MapLegend)[0].html
+
+
+def test_route_toggle_removes_the_layer(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    fmap, _ = build_map(data, replace(ALL_LAYERS, show_routes=False))
+    assert layers_of(fmap, RouteVolumeLayer) == []
+
+
+def test_app_route_layer_toggle_runs(monkeypatch, fixtures_dir: Path):
+    at = _run_app(monkeypatch, fixtures_dir)
+    toggle = next(box for box in at.sidebar.checkbox if box.label == "Synthetic routes")
+    toggle.check().run()
+    assert not at.exception
+    assert not at.error
+    toggle.uncheck().run()
+    assert not at.exception

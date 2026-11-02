@@ -1,16 +1,17 @@
 """Measure how long the dashboard needs to prepare the full-city baseline map.
 
 Times the server-side steps of the main map: loading and validating the edges table,
-building the lane-status GeoJSON layer, building the Folium map, and rendering it to
-HTML. It also reports the page size the browser has to download. Drawing time in the
+building the lane-status GeoJSON layer, building the route-volume layer, building the
+Folium map, and rendering it to HTML. It also reports the page size the browser has to download. Drawing time in the
 browser is not included; open the dashboard to see that.
 
 Until the real Budapest network is merged, the script generates a synthetic
-city-sized edge table spread over Budapest.
+city-sized edge table spread over Budapest, and synthetic routes over it.
 
 Usage:
     make measure-dashboard
     make measure-dashboard MEASURE_ARGS="--n-edges 300000"
+    make measure-dashboard MEASURE_ARGS="--n-routes 20000"        # plus the route-volume layer
     make measure-dashboard MEASURE_ARGS="--edges data/processed/edges.parquet"
     make measure-dashboard MEASURE_ARGS="--save-edges /tmp/city/edges.parquet"
 """
@@ -29,7 +30,7 @@ import pandas as pd
 from shapely.geometry import LineString
 
 from bubi.contracts.io import load_contract_table, validate_table
-from bubi.dashboard.app import Settings, build_map, lane_status_geojson
+from bubi.dashboard.app import Settings, build_map, lane_status_geojson, route_volume_layer
 from bubi.dashboard.data import FIXTURES_DIR, PROCESSED_DIR, DashboardData
 
 # Budapest's administrative extent, roughly.
@@ -82,13 +83,38 @@ def synthetic_edges(n_edges: int, seed: int = 42) -> gpd.GeoDataFrame:
     )
 
 
+def synthetic_routes(
+    edges: gpd.GeoDataFrame, n_routes: int, edges_per_route: int = 50, seed: int = 42
+) -> pd.DataFrame:
+    """Baseline routes that each use ``edges_per_route`` random edges.
+
+    The edges are not a connected path; that does not matter for timing, which depends
+    on how many (route, edge) pairs are counted and how many distinct edges get a volume.
+    Trip counts are heavy-tailed like gravity-model output.
+    """
+    rng = np.random.default_rng(seed)
+    ids = edges["edge_id"].to_numpy()
+    return pd.DataFrame(
+        {
+            "scenario": "baseline",
+            "start_station_id": [f"s{i}" for i in range(n_routes)],
+            "end_station_id": [f"t{i}" for i in range(n_routes)],
+            "route_type": "synthetic",
+            "edges": [list(rng.choice(ids, edges_per_route)) for _ in range(n_routes)],
+            "trip_count": np.round(rng.lognormal(1.0, 1.0, n_routes), 1) + 0.1,
+        }
+    )
+
+
 def load_stations() -> pd.DataFrame:
     processed = PROCESSED_DIR / "stations.parquet"
     path = processed if processed.exists() else FIXTURES_DIR / "sample_stations.parquet"
     return load_contract_table("stations", path)
 
 
-def measure(edges: gpd.GeoDataFrame, stations: pd.DataFrame) -> list[tuple[str, str]]:
+def measure(
+    edges: gpd.GeoDataFrame, stations: pd.DataFrame, routes: pd.DataFrame | None = None
+) -> list[tuple[str, str]]:
     """Run the main-map steps once and return (step, result) rows."""
     results = []
 
@@ -100,7 +126,16 @@ def measure(edges: gpd.GeoDataFrame, stations: pd.DataFrame) -> list[tuple[str, 
     geojson = lane_status_geojson(edges)
     results.append(("Build lane-status GeoJSON", f"{time.perf_counter() - started:.2f} s"))
 
-    data = DashboardData(tables={"stations": stations, "edges": edges})
+    tables = {"stations": stations, "edges": edges}
+    route_layer = None
+    if routes is not None and not routes.empty:
+        tables["routes"] = routes
+        started = time.perf_counter()
+        route_layer = route_volume_layer(edges, routes)
+        results.append(("Build route-volume layer", f"{time.perf_counter() - started:.2f} s"))
+        results.append(("Edges with route volume", f"{route_layer.n_edges:,}"))
+
+    data = DashboardData(tables=tables)
     settings = Settings(
         scenario="baseline",
         basemap="OpenStreetMap",
@@ -108,12 +143,12 @@ def measure(edges: gpd.GeoDataFrame, stations: pd.DataFrame) -> list[tuple[str, 
         show_proposed=False,
         show_population=False,
         show_lanes=True,
-        show_routes=False,
+        show_routes=route_layer is not None,
         show_corridors=False,
         top_n=10,
     )
     started = time.perf_counter()
-    fmap, _ = build_map(data, settings, geojson)
+    fmap, _ = build_map(data, settings, geojson, route_layer)
     results.append(("Build Folium map", f"{time.perf_counter() - started:.2f} s"))
 
     started = time.perf_counter()
@@ -133,6 +168,13 @@ def main() -> None:
         default=200_000,
         help="Size of the synthetic network when --edges is not given (default: 200000).",
     )
+    parser.add_argument(
+        "--n-routes",
+        type=int,
+        default=0,
+        help="Synthetic routes of 50 edges each over the measured edges, to also time the "
+        "route-volume layer (default: 0, street layer only).",
+    )
     parser.add_argument("--save-edges", type=Path, help="Also write the measured edges here.")
     args = parser.parse_args()
 
@@ -146,6 +188,7 @@ def main() -> None:
         edges = synthetic_edges(args.n_edges)
         label = "synthetic network over Budapest (seed 42)"
     stations = load_stations()
+    routes = synthetic_routes(edges, args.n_routes) if args.n_routes > 0 else None
 
     if args.save_edges:
         args.save_edges.parent.mkdir(parents=True, exist_ok=True)
@@ -153,7 +196,8 @@ def main() -> None:
 
     print(f"Edges: {len(edges):,} directed edges, {label}")
     print(f"Stations: {len(stations):,}")
-    for step, result in measure(edges, stations):
+    print(f"Routes: {0 if routes is None else len(routes):,} synthetic, 50 edges each")
+    for step, result in measure(edges, stations, routes):
         print(f"  {step:<30} {result}")
 
 

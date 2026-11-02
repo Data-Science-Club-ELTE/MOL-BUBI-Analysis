@@ -11,6 +11,7 @@ Run with ``make dashboard``.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import time
@@ -27,6 +28,7 @@ import streamlit as st
 from branca.element import Element, MacroElement, Template
 from streamlit_folium import st_folium
 
+from bubi.corridors.scoring import calculate_edge_route_volumes
 from bubi.dashboard.data import (
     BUDAPEST_CENTER,
     DATA_DIR_ENV,
@@ -48,8 +50,18 @@ NO_LANE_COLOR = "#adb5bd"  # no lane in this direction
 GAP_COLOR = "#e8590c"  # priority corridor (gap)
 STATION_COLOR = "#1c7ed6"
 PROPOSED_COLOR = "#2b8a3e"
-ROUTE_COLOR = "#7048e8"
 POPULATION_COLOR = "#f08c00"
+
+# Route volume is a magnitude, so one hue from light to dark. Violet stays clear of the
+# station blue, lane green/grey and corridor orange; every step keeps >= 2.6:1 contrast
+# on both basemaps, so the lightest class is still visible.
+ROUTE_RAMP = ("#9775fa", "#7950f2", "#5f3dc4", "#4527a0")
+ROUTE_WEIGHTS = (2.5, 4.0, 5.5, 7.5)
+# Further out than the lane lines (LANE_OFFSET_M) so a route never hides the lane colour.
+ROUTE_OFFSET_M = 10.0
+COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+ROUTE_FIELDS = ("id", "volume", "heading", "lane", "step", "coords")
+EMPTY_ROUTE_DATA = json.dumps(dict.fromkeys(ROUTE_FIELDS, []))
 
 LANE_WEIGHT = 4
 NO_LANE_WEIGHT = 2.5
@@ -122,6 +134,15 @@ def _cached_lane_geojson(data_dir_override: str | None, files_changed_at: float)
     return lane_status_geojson(_cached_load(data_dir_override, files_changed_at).get("edges"))
 
 
+@st.cache_resource(show_spinner="Preparing the route-volume layer…")
+def _cached_route_layer(
+    data_dir_override: str | None, files_changed_at: float, scenario: str
+) -> RouteLayer:
+    """Built once per scenario, so toggling layers or switching back is instant."""
+    data = _cached_load(data_dir_override, files_changed_at)
+    return route_volume_layer(data.get("edges"), for_scenario(data.get("routes"), scenario))
+
+
 def _latest_change() -> float:
     paths = [path for path, _ in resolve_table_paths().values() if path.exists()]
     return max((path.stat().st_mtime for path in paths), default=0.0)
@@ -135,11 +156,18 @@ def edge_ids_of_corridors(corridors: pd.DataFrame) -> set[str]:
 
 
 def route_volume_per_edge(routes: pd.DataFrame) -> pd.Series:
-    """Total trips crossing each directed edge in the given routes."""
+    """Total trips crossing each directed edge in the given routes (one scenario).
+
+    Uses the corridor module's counting rules, so the map shows the same volumes that
+    corridor scoring ranks: a route that passes an edge twice counts once.
+
+    Raises:
+        ValueError: if the routes table is malformed (see ``calculate_edge_route_volumes``).
+    """
     if routes.empty:
         return pd.Series(dtype=float)
-    exploded = routes.assign(edge_id=routes["edges"].map(as_id_list)).explode("edge_id")
-    return exploded.groupby("edge_id")["trip_count"].sum()
+    volumes = calculate_edge_route_volumes(routes)
+    return volumes.groupby("edge_id")["volume"].sum()
 
 
 # ---------------------------------------------------------------- map helpers
@@ -227,6 +255,131 @@ def lane_status_geojson(edges: gpd.GeoDataFrame | None) -> str:
                 f'{{"type":"Feature","properties":{{"lane":"{lane}"}},"geometry":{geometry}}}'
             )
     return '{"type":"FeatureCollection","features":[' + ",".join(features) + "]}"
+
+
+@dataclass
+class RouteLayer:
+    """Everything the map needs to draw route volumes for one scenario."""
+
+    data: str  # compact JSON, see route_volume_layer()
+    legend: list[tuple[str, str]]  # (swatch HTML, label), lowest volume first
+    label: str  # what kind of routes these are, shown on the layer (D5)
+    notes: list[str]
+    n_edges: int = 0
+
+
+def volume_classes(volumes: np.ndarray) -> tuple[np.ndarray, list[str]]:
+    """Split volumes into up to four classes at their quartiles.
+
+    Returns the class of each volume (0 = lowest) and one label per class giving the
+    smallest and largest volume actually in it. Ties at a quartile, or quartiles with no
+    volume between them, give fewer classes.
+    """
+    breaks = np.unique(np.quantile(volumes, [0.25, 0.5, 0.75]))
+    classes = np.searchsorted(breaks, volumes, side="left")
+    present, classes = np.unique(classes, return_inverse=True)
+    labels = []
+    for c in range(len(present)):
+        lo, hi = volumes[classes == c].min(), volumes[classes == c].max()
+        labels.append(_volume_text(lo) if lo == hi else f"{_volume_text(lo)}–{_volume_text(hi)}")
+    return classes, labels
+
+
+def _volume_text(volume: float) -> str:
+    """Whole trips from 10 up; one decimal below, so a small volume never reads as 0."""
+    if volume >= 10:
+        return f"{volume:,.0f}"
+    return f"{volume:.1f}".removesuffix(".0")
+
+
+def compass_headings(lines: np.ndarray) -> np.ndarray:
+    """Eight-point compass heading from the first to the last point of each metric line."""
+    start, end = shapely.get_point(lines, 0), shapely.get_point(lines, -1)
+    dx = shapely.get_x(end) - shapely.get_x(start)
+    dy = shapely.get_y(end) - shapely.get_y(start)
+    bearing = np.degrees(np.arctan2(dx, dy)) % 360
+    return np.array(COMPASS)[np.round(bearing / 45).astype(int) % len(COMPASS)]
+
+
+def route_layer_label(routes: pd.DataFrame) -> str:
+    kinds = set(routes["route_type"]) if "route_type" in routes else {"synthetic"}
+    if kinds == {"synthetic"}:
+        return "Synthetic demo data (D5): not observed cycling"
+    if kinds == {"observed"}:
+        return "Observed routes"
+    return "Synthetic + observed routes"
+
+
+def _flat_coords(lines: np.ndarray) -> list[list[float]]:
+    """Each line's coordinates as one flat ``[lon, lat, lon, lat, …]`` list.
+
+    Rounding to 5 decimals (about 1 m) also keeps the numbers short in JSON.
+    """
+    coords, line_index = shapely.get_coordinates(lines, return_index=True)
+    starts = np.flatnonzero(np.diff(line_index)) + 1
+    return [part.ravel().tolist() for part in np.split(np.round(coords, 5), starts)]
+
+
+def _ramp_steps(n_classes: int) -> list[int]:
+    """Which ``ROUTE_RAMP`` step each volume class uses, spread from lightest to darkest.
+
+    A single class takes the darkest step so it stands out on the map.
+    """
+    last = len(ROUTE_RAMP) - 1
+    if n_classes == 1:
+        return [last]
+    return np.round(np.linspace(0, last, n_classes)).astype(int).tolist()
+
+
+def route_volume_layer(edges: gpd.GeoDataFrame, routes: pd.DataFrame) -> RouteLayer:
+    """Route volume per directed edge for one scenario's routes, ready to draw.
+
+    One line per edge that any route uses, shifted ``ROUTE_OFFSET_M`` to the right of
+    travel (the same convention as the lane layer), coloured and sized by volume class.
+    ``RouteLayer.data`` is compact JSON with one array per field, index-aligned:
+    ``id``, ``volume``, ``heading`` (compass point), ``lane`` (1 = lane in this
+    direction), ``step`` (index into ``ROUTE_RAMP``/``ROUTE_WEIGHTS``) and ``coords``
+    (flat ``[lon, lat, lon, lat, …]`` per edge). City-wide, GeoJSON with per-feature
+    properties was about three times larger. Problems with the routes table become
+    notes instead of errors.
+    """
+    label = route_layer_label(routes)
+    try:
+        volumes = route_volume_per_edge(routes)
+    except ValueError as err:
+        notes = [f"Route volumes could not be computed: {err}"]
+        return RouteLayer(EMPTY_ROUTE_DATA, [], label, notes)
+
+    notes = []
+    used = edges[edges["edge_id"].isin(volumes.index)]
+    unknown = len(volumes) - len(used)
+    if unknown:
+        notes.append(f"{unknown} edge(s) used by routes are not in the edges table and not drawn.")
+    if used.empty:
+        return RouteLayer(EMPTY_ROUTE_DATA, [], label, notes)
+
+    volume = volumes.reindex(used["edge_id"]).to_numpy(dtype=float)
+    metric = gpd.GeoSeries(used.geometry.values, crs=edges.crs or "EPSG:4326").to_crs(METRIC_CRS)
+    headings = compass_headings(metric.to_numpy())
+    shifted = shift_right(metric.simplify(SIMPLIFY_M).to_numpy(), ROUTE_OFFSET_M)
+    lines = gpd.GeoSeries(shifted, crs=METRIC_CRS).to_crs("EPSG:4326").to_numpy()
+    classes, class_labels = volume_classes(volume)
+    steps = _ramp_steps(len(class_labels))
+
+    rounded = np.round(volume, 1)
+    data = {
+        "id": used["edge_id"].astype(str).tolist(),
+        "volume": [int(v) if v.is_integer() else v for v in rounded.tolist()],
+        "heading": headings.tolist(),
+        "lane": used["has_dedicated_lane"].to_numpy(dtype=int).tolist(),
+        "step": np.asarray(steps)[classes].tolist(),
+        "coords": _flat_coords(lines),
+    }
+    legend = [
+        (_line_swatch(ROUTE_RAMP[step], ROUTE_WEIGHTS[step]), f"{text} trips")
+        for step, text in zip(steps, class_labels)
+    ]
+    return RouteLayer(json.dumps(data, separators=(",", ":")), legend, label, notes, len(used))
 
 
 def stations_geojson(stations: pd.DataFrame) -> dict:
@@ -337,13 +490,26 @@ class MapLegend(MacroElement):
         self.html = html
 
 
-class LaneStatusLayer(MacroElement):
+class _InlineDataLayer(MacroElement):
+    """A layer whose (possibly multi-megabyte) JSON text is written into the page as is.
+
+    ``folium.GeoJson`` would parse and re-serialise it on every Streamlit rerun, which
+    takes seconds for a city-wide network.
+    """
+
+    def render(self, **kwargs) -> None:
+        # MacroElement.render wraps the finished script in a new Jinja template, which
+        # means re-parsing megabytes of coordinates on every rerun. Insert it as data.
+        script = Element("{{ this.code }}")
+        script.code = self._template.module.script(self, kwargs)
+        self.get_root().script.add_child(script, name=self.get_name())
+
+
+class LaneStatusLayer(_InlineDataLayer):
     """One Leaflet GeoJSON layer with every directed edge, coloured by lane status.
 
-    Takes the text from :func:`lane_status_geojson` and writes it into the page as is.
-    ``folium.GeoJson`` would parse and re-serialise it on every Streamlit rerun, which
-    takes seconds for a city-wide network. The layer does not react to the mouse:
-    checking 100,000+ lines on every mouse move makes the map lag.
+    Takes the text from :func:`lane_status_geojson`. The layer does not react to the
+    mouse: checking 100,000+ lines on every mouse move makes the map lag.
     """
 
     _template = Template(
@@ -364,24 +530,77 @@ class LaneStatusLayer(MacroElement):
         self.geojson = geojson
         self.style = LANE_STYLE_JS
 
-    def render(self, **kwargs) -> None:
-        # MacroElement.render wraps the finished script in a new Jinja template, which
-        # means re-parsing megabytes of coordinates on every rerun. Insert it as data.
-        script = Element("{{ this.code }}")
-        script.code = self._template.module.script(self, kwargs)
-        self.get_root().script.add_child(script, name=self.get_name())
+
+class RouteVolumeLayer(_InlineDataLayer):
+    """Route volume per directed edge, from :func:`route_volume_layer`.
+
+    Colour and width come from each edge's volume class, and hovering shows the layer
+    label (synthetic or observed), edge ID, direction, volume and lane status. The
+    tooltip text is built only when hovered, so the page carries no per-edge text.
+    """
+
+    _template = Template(
+        """
+        {% macro script(this, kwargs) %}
+        var {{ this.get_name() }} = (function () {
+            var d = {{ this.data }};
+            var colors = {{ this.colors|tojson }}, weights = {{ this.weights|tojson }};
+            var label = {{ this.label|tojson }};
+            var esc = function (s) {
+                return String(s).replace(/[&<>"']/g, function (c) {
+                    return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c];
+                });
+            };
+            var tooltip = function (line) {
+                var i = line.bubiIndex, id = String(d.id[i]), parts = id.split("-");
+                var nodes = parts.length === 3 ? "node " + parts[0] + " → " + parts[1] + ", " : "";
+                return "<b>" + esc(label) + "</b><br>" +
+                    "Edge " + esc(id) + "<br>" +
+                    "Direction: " + esc(nodes + "heading " + d.heading[i]) + "<br>" +
+                    "Trips: " + esc(d.volume[i].toLocaleString()) + "<br>" +
+                    "Bike lane in this direction: " + (d.lane[i] ? "yes" : "no");
+            };
+            var group = L.featureGroup();
+            for (var i = 0; i < d.id.length; i++) {
+                var c = d.coords[i], points = [];
+                for (var j = 0; j < c.length; j += 2) points.push([c[j + 1], c[j]]);
+                var line = L.polyline(points, {
+                    color: colors[d.step[i]], weight: weights[d.step[i]], opacity: 0.85
+                });
+                line.bubiIndex = i;
+                line.bindTooltip(tooltip, {sticky: true});
+                group.addLayer(line);
+            }
+            return group;
+        })().addTo({{ this._parent.get_name() }});
+        {% endmacro %}
+        """
+    )
+
+    def __init__(self, layer: RouteLayer, name: str = "Route volume") -> None:
+        super().__init__()
+        self._name = "RouteVolumeLayer"
+        self.layer_name = name
+        self.data = layer.data
+        self.label = layer.label
+        self.colors = list(ROUTE_RAMP)
+        self.weights = list(ROUTE_WEIGHTS)
 
 
 # ---------------------------------------------------------------- map
 
 
 def build_map(
-    data: DashboardData, settings: Settings, lane_geojson: str | None = None
+    data: DashboardData,
+    settings: Settings,
+    lane_geojson: str | None = None,
+    route_layer: RouteLayer | None = None,
 ) -> tuple[folium.Map, list[str]]:
     """Draw the enabled layers. Returns the map and notes about anything not drawn.
 
-    ``lane_geojson`` is the output of :func:`lane_status_geojson`; pass a cached copy to
-    avoid rebuilding it. The map opens zoomed to every station and edge.
+    ``lane_geojson`` is the output of :func:`lane_status_geojson` and ``route_layer`` of
+    :func:`route_volume_layer` for ``settings.scenario``; pass cached copies to avoid
+    rebuilding them. The map opens zoomed to every station and edge.
     """
     notes: list[str] = []
     legend: list[tuple[str, str]] = []
@@ -428,21 +647,15 @@ def build_map(
         )
 
     routes = for_scenario(data.get("routes"), scenario)
+    route_shown = False
     if settings.show_routes and not routes.empty:
-        volumes = route_volume_per_edge(routes)
-        layer = folium.FeatureGroup(name="Synthetic routes")
-        max_vol = float(volumes.max()) or 1.0
-        for _, row in edges[edges["edge_id"].isin(volumes.index)].iterrows():
-            vol = float(volumes[row["edge_id"]])
-            folium.PolyLine(
-                offset_line(list(row.geometry.coords), meters=8),
-                color=ROUTE_COLOR,
-                weight=2 + 6 * vol / max_vol,
-                opacity=0.6,
-                tooltip=f"Edge {row['edge_id']} · synthetic trips: {vol:.0f}",
-            ).add_to(layer)
-        layer.add_to(fmap)
-        legend.append((_line_swatch(ROUTE_COLOR, 5), "Synthetic trips (wider = more)"))
+        if route_layer is None:
+            route_layer = route_volume_layer(edges, routes)
+        notes.extend(route_layer.notes)
+        if route_layer.legend:
+            fmap.add_child(RouteVolumeLayer(route_layer))
+            legend.extend(route_layer.legend)
+            route_shown = True
 
     corridors = for_scenario(data.get("corridors"), scenario)
     if settings.show_corridors and not corridors.empty:
@@ -515,13 +728,15 @@ def build_map(
             notes.append(f"{skipped} proposed station(s) have an invalid H3 id and are not drawn.")
 
     if legend:
-        note = ""
-        if settings.show_lanes:
-            note = (
+        note = []
+        if settings.show_lanes or route_shown:
+            note.append(
                 "Each direction of a street is drawn on the right-hand side of travel, so a "
                 "two-way street shows two lines."
             )
-        fmap.add_child(MapLegend(legend_html(legend, note)))
+        if route_shown:
+            note.append(f"Route volume, darker and wider = more trips. {route_layer.label}.")
+        fmap.add_child(MapLegend(legend_html(legend, " ".join(note))))
     return fmap, notes
 
 
@@ -630,15 +845,17 @@ def render_scenario_comparison(data: DashboardData, settings: Settings) -> None:
     st.subheader("Scenario comparison")
     st.caption(
         "One map per scenario with the layers selected in the sidebar, except the street "
-        "network: drawing every street four times would slow the page down, so it appears on "
-        "the main map only. Week 5 adds demand per newly served person, people served per km "
+        "network and route volume: drawing them four times would slow the page down, so they "
+        "appear on the main map only. Week 5 adds demand per newly served person, people served per km "
         "of new corridor, and robust vs station-dependent corridors. Counts below come from the "
         "loaded tables."
     )
     for column, scenario in zip(st.columns(len(SCENARIOS)), SCENARIOS):
         with column:
             st.markdown(f"**{scenario}**")
-            fmap, _ = build_map(data, replace(settings, scenario=scenario, show_lanes=False))
+            fmap, _ = build_map(
+                data, replace(settings, scenario=scenario, show_lanes=False, show_routes=False)
+            )
             st_folium(
                 fmap,
                 height=300,
@@ -734,7 +951,10 @@ def main() -> None:
 
     started = time.perf_counter()
     lane_geojson = _cached_lane_geojson(*cache_key) if settings.show_lanes else None
-    fmap, notes = build_map(data, settings, lane_geojson)
+    route_layer = (
+        _cached_route_layer(*cache_key, settings.scenario) if settings.show_routes else None
+    )
+    fmap, notes = build_map(data, settings, lane_geojson, route_layer)
     map_state = st_folium(
         fmap,
         height=560,
