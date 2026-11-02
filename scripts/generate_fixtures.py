@@ -12,6 +12,7 @@ import pandas as pd
 from shapely.geometry import LineString
 
 from bubi.contracts.io import save_contract_table
+from bubi.demand.gravity import generate_synthetic_trips
 
 
 def generate_all_fixtures(output_dir: Path) -> None:
@@ -30,16 +31,16 @@ def generate_all_fixtures(output_dir: Path) -> None:
     save_contract_table(df_stations, "stations", output_dir / "sample_stations.parquet")
 
     # 2. Population (H3 res 9 cells)
-    # Valid H3 res 9 indices around central Budapest
+    # Valid H3 res 9 indices around central Budapest (covering the station coordinates)
     h3_cells = [
-        "891e285818fffff",
-        "891e2858193ffff",
-        "891e2858197ffff",
-        "891e2858183ffff",
-        "891e285818bffff",
-        "891e28581a3ffff",
-        "891e28581a7ffff",
-        "891e28581abffff",
+        "891e037aacfffff",  # Deák Ferenc tér (47.4979, 19.0541)
+        "891e037aa63ffff",  # Kálvin tér (47.4893, 19.0617)
+        "891e037aa87ffff",  # Oktogon (47.5058, 19.0632)
+        "891e03781b7ffff",  # Fővám tér (47.4862, 19.0558)
+        "891e037aa3bffff",  # Blaha Lujza tér (47.4962, 19.0706)
+        "891e037aa0bffff",  # Astoria (47.4943, 19.0595)
+        "891e037ae63ffff",  # Kossuth Lajos tér / Parlament (47.5072, 19.0460)
+        "891e037aa4bffff",  # Ferenciek tere (47.4907, 19.0514)
     ]
     pop_data = [
         {"cell_id": h3_cells[0], "population": 420.0},
@@ -281,28 +282,11 @@ def generate_all_fixtures(output_dir: Path) -> None:
     df_corridors = pd.DataFrame(corridors_data)
     save_contract_table(df_corridors, "corridors", output_dir / "sample_corridors.parquet")
 
-    # Trip Matrix handoff interface
-    trip_matrix_data = [
-        {
-            "scenario": "baseline",
-            "start_station_id": "futar_001",
-            "end_station_id": "futar_002",
-            "trip_count": 120.0,
-        },
-        {
-            "scenario": "baseline",
-            "start_station_id": "futar_002",
-            "end_station_id": "futar_001",
-            "trip_count": 115.0,
-        },
-        {
-            "scenario": "baseline",
-            "start_station_id": "futar_001",
-            "end_station_id": "futar_003",
-            "trip_count": 210.0,
-        },
-    ]
-    df_trip_matrix = pd.DataFrame(trip_matrix_data)
+    # Trip Matrix handoff interface: produced by the gravity model itself (baseline scenario),
+    # so the fixture always matches the documented formula and default parameters.
+    df_trip_matrix = generate_synthetic_trips(
+        df_stations, df_population, scenario="baseline", k_scaling=0.05, beta_decay=0.0015
+    )
     save_contract_table(df_trip_matrix, "trip_matrix", output_dir / "sample_trip_matrix.parquet")
 
     print(f"All 7 contract tables + trip matrix generated successfully in {output_dir}.")

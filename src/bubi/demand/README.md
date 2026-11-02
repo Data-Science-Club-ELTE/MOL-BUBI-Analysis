@@ -55,3 +55,9 @@ You do not need to wait for real BKK data or OSMnx networks:
    ```bash
    pytest tests/test_contracts.py -k trip_matrix
    ```
+
+
+---
+
+## 4. Status
+Implemented. See `docs/gravity_model_spec.md` and `tests/test_gravity.py`.

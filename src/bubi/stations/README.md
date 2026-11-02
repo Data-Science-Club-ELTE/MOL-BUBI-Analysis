@@ -58,3 +58,9 @@ Parquet file saved to `data/processed/station_candidates.parquet` (tested agains
    ```bash
    pytest tests/test_contracts.py -k station_candidates
    ```
+
+
+---
+
+## 4. Status
+Filter, lane connectivity, greedy selection and pass-rate test implemented. See `docs/station_lane_connectivity.md`.

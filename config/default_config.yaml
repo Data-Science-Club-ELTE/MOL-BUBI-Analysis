@@ -25,10 +25,18 @@ demand:
   gravity_distance_decay: "exponential"  # or power_law
   gravity_beta: 0.0015
 
+stations:
+  # Frozen Futár bicycle-rental snapshot behind data/processed/stations.parquet.
+  # Raw files are git-ignored; see docs/ingestion_notes.md for where they are kept.
+  snapshot_date: "2026-10-18"
+  snapshot_file: "futar_bicycle_rental_20261018T163442Z.json"
+  snapshot_sha256: "8c3fe365e1f0e59e7136edeb028f0d9f9e05a07d84c3195d6a3215278511d302"
+
 station_scoring:
   walk_coverage_threshold_m: 350.0
   candidate_n: 10
   min_spacing_m: 400.0
+  R: 400.0
 
 scenarios:
   active:
