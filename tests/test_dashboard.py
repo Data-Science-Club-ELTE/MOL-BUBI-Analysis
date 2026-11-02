@@ -1,5 +1,6 @@
 """Tests for the dashboard skeleton: data loading, error messages and a headless app run."""
 
+import io
 import json
 import math
 import shutil
@@ -22,6 +23,7 @@ from bubi.dashboard.app import (
     MapLegend,
     Settings,
     build_map,
+    export_csv,
     lane_status_geojson,
     legend_html,
     map_bounds,
@@ -38,6 +40,7 @@ from bubi.dashboard.data import (
     cell_center,
     fixture_notes,
     for_scenario,
+    load_config,
     load_dashboard_data,
     proposed_stations,
     resolve_table_paths,
@@ -427,3 +430,30 @@ def test_app_shows_error_instead_of_crashing(monkeypatch, fixture_copy: Path):
     at = _run_app(monkeypatch, fixture_copy)
     assert not at.exception
     assert at.error and "`edges` table is missing" in at.error[0].value
+
+
+@pytest.mark.parametrize(
+    "edge_ids",
+    [np.array(["a-b-0", "b-c-0"]), ["a-b-0", "b-c-0"], '["a-b-0", "b-c-0"]', "a-b-0,b-c-0"],
+)
+def test_export_csv_writes_edge_ids_as_a_json_array(edge_ids):
+    table = pd.DataFrame({"corridor_id": ["c1"], "edge_ids": [edge_ids], "rank": [1]})
+    exported = pd.read_csv(io.BytesIO(export_csv(table)))
+    assert json.loads(exported.loc[0, "edge_ids"]) == ["a-b-0", "b-c-0"]
+
+
+def test_export_csv_keeps_tables_without_edge_ids():
+    table = pd.DataFrame({"cell_id": ["891e037aacfffff"], "rank": [1]})
+    assert export_csv(table) == table.to_csv(index=False).encode("utf-8")
+
+
+def test_missing_config_falls_back_to_defaults(tmp_path: Path):
+    assert load_config(tmp_path / "missing.yaml") == {}
+
+
+@pytest.mark.parametrize("text", ["scenarios: [unclosed", "- just\n- a list\n"])
+def test_broken_config_is_reported_not_ignored(tmp_path: Path, text: str):
+    path = tmp_path / "config.yaml"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(DashboardDataError, match="Using default settings"):
+        load_config(path)
