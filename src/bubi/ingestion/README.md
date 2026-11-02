@@ -157,3 +157,44 @@ Questions to settle against the real data:
 - Are station IDs Futár `id`s, or station codes or names?
 - Which timezone are the timestamps in, and do they carry an offset?
 - Do trips and GPS points come in one file or two, and in which format (CSV, JSON, Parquet)?
+
+### 8.1 Contract with the map-matcher
+
+`convert_observed_routes` takes the matcher as its `matcher` argument, so CS 2's implementation can replace the placeholder `map_match_trace` without changing the converter. The matcher is called once per trip that passed the time and station checks.
+
+| Side | Rule |
+|---|---|
+| Input | One trip's GPS points as a `DataFrame` with columns `trip_id`, `timestamp`, `lat`, `lon`, `timestamp_utc` and a 0-based index. Points with unresolvable timestamps are already removed, and rows are sorted by `timestamp_utc`. |
+| Output | A list of directed `edges.edge_id` values (`u-v-key`), in travel order. |
+| No match | Return an empty list. The converter counts the trip under `unmatched_trace` and lists its ID. |
+| Errors | Exceptions are not caught; they stop the conversion. |
+
+The matcher must return only IDs from the frozen graph. The volume step (`calculate_edge_route_volumes`) rejects IDs that are not in `u-v-key` form, but it accepts well-formed IDs that are not in the graph. To catch these, pass the `edges` table to the converter as `convert_observed_routes(..., edges=edges)`. A trip whose route uses an ID missing from `edges.edge_id` is then dropped and counted under `unknown_edge`. The report lists the trip IDs (`unknown_edge_trip_ids`) and the missing edge IDs (`unknown_edge_ids`). Without `edges`, the check is skipped and `unknown_edge` is 0.
+
+### 8.2 End-to-end check on simulated GPS (Issue #35)
+
+`tests/test_observed_routes_e2e.py` runs the converter on the mock trips and GPS points, through `RoutesSchema` and into the volume step. Map-matching is still a placeholder, so the test uses a stand-in matcher that exists only in the test file. It snaps each GPS point to the nearest node of `tests/fixtures/sample_edges.parquet` within 500 m and joins consecutive nodes into directed edges.
+
+Result on the mock data:
+
+- **Conversion:** 7 input trips. 3 are converted into 2 `observed` routes, which validate against `RoutesSchema`. The other 4 are dropped and counted: 2 invalid times, 1 unknown station, 1 trip without GPS points. Converted plus dropped trips equal the input, so no trip is lost silently. The run passes the sample edges as `edges`, and every returned edge ID exists in them. A second test adds an edge ID that is not in the graph to one trip; that trip is counted under `unknown_edge` and kept out of the routes.
+- **Volume step:** the observed routes give volumes `n1-n2-0` = 2, `n2-n1-0` = 1 and `n1-n3-0` = 1. Combined with the synthetic `tests/fixtures/sample_routes.parquet`, each edge's volume is the synthetic volume plus the observed volume. The volume step needed no change.
+- **Separate totals:** `volume_totals_by_route_type` runs the volume step separately for each scenario and route type. On the combined table, it reports `baseline`/`observed` as 2 routes, 3 trips, 3 edges and volume 4, next to `baseline`/`synthetic` with 625 trips.
+- **Frozen station list:** run against `data/processed/stations.parquet` (704 Futár stations), the mock station IDs (`futar_001`, ...) match nothing. All 5 trips with valid times are reported under `unmatched_station`, and their IDs are listed under `unknown_station_ids`.
+
+```python
+import pandas as pd
+
+from bubi.ingestion.observed_routes import volume_totals_by_route_type
+
+synthetic = pd.read_parquet("tests/fixtures/sample_routes.parquet")
+print(volume_totals_by_route_type(synthetic))
+```
+
+Conclusion: the converter, `RoutesSchema` and the volume step fit together, and every drop is reported. This check uses toy data only, so real data still has to prove the following:
+
+- Real station IDs match Futár `id`s. If they are codes or names, the reading side needs a mapping, and the `unmatched_station` count shows how many trips do not map.
+- The timezone and offset handling fits the real timestamps.
+- A real map-matcher on the real OSM graph returns edge IDs from that graph, so `unknown_edge` stays near zero. The `edges` table does not exist yet: `network/graph.py` is still a stub.
+- Real GPS noise and sampling rates give usable traces. The 500 m nearest-node snapping is only good enough for the toy fixture.
+- The converter runs in acceptable time on the real data volume. It calls the matcher once per trip in a Python loop.
