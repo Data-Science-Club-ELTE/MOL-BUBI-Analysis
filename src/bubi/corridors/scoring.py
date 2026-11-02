@@ -7,7 +7,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from bubi.contracts.schemas import EdgeScoresSchema
+from bubi.contracts.schemas import CorridorsSchema, EdgeScoresSchema
 
 VOLUME_INPUT_COLUMNS = ("scenario", "edges", "trip_count")
 VOLUME_OUTPUT_COLUMNS = ["scenario", "edge_id", "volume"]
@@ -15,6 +15,10 @@ VOLUME_OUTPUT_COLUMNS = ["scenario", "edge_id", "volume"]
 GAP_EDGE_COLUMNS = ("edge_id", "length_m", "has_dedicated_lane")
 GAP_VOLUME_COLUMNS = ("scenario", "edge_id", "volume")
 EDGE_SCORE_COLUMNS = ["scenario", "edge_id", "volume", "score", "rank"]
+CORRIDOR_SCORE_COLUMNS = ("scenario", "edge_id", "score")
+CORRIDOR_COLUMNS = ["scenario", "corridor_id", "edge_ids", "score", "rank"]
+# Corridor IDs follow the sample fixture: corr_<scenario code>_<rank>, e.g. corr_bl_01.
+SCENARIO_CODES = {"baseline": "bl", "lane_aware": "la", "population_only": "po"}
 
 # Directed edge ID "u-v-key": two node IDs without dashes or spaces, then an integer key.
 _EDGE_ID_PATTERN = re.compile(r"[^\s-]+-[^\s-]+-\d+")
@@ -292,14 +296,220 @@ def detect_gaps_and_score_edges(
     return EdgeScoresSchema.validate(work[EDGE_SCORE_COLUMNS])
 
 
+def _empty_corridors() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "scenario": pd.Series(dtype="object"),
+            "corridor_id": pd.Series(dtype="object"),
+            "edge_ids": pd.Series(dtype="object"),
+            "score": pd.Series(dtype="float64"),
+            "rank": pd.Series(dtype="int64"),
+        }
+    )
+
+
+def _edge_ends(edge_id: str) -> tuple[str, str]:
+    """Start and end node of a directed edge ``u-v-key``."""
+    start_node, end_node, _key = edge_id.split("-")
+    return start_node, end_node
+
+
+def _best_match(options: list[str], way: object, way_of: dict[str, object]) -> str | None:
+    """The one edge a corridor should continue with, or None if there is no clear one.
+
+    A single option is taken whatever its OSM way. With several (a crossing, fork or
+    join), the corridor stays on its own street: it takes the option on the same OSM way
+    if exactly one is; otherwise the corridor ends there.
+    """
+    if len(options) == 1:
+        return options[0]
+    same_street = [e for e in options if way_of[e] == way]
+    return same_street[0] if len(same_street) == 1 else None
+
+
+def _chain_gap_edges(way_of: dict[str, object]) -> list[list[str]]:
+    """Group the gap edges of one scenario into corridors, each in travel order.
+
+    ``way_of`` maps each gap edge ID to its OSM way ID. Edge ``a`` continues into edge
+    ``b`` when ``b`` starts where ``a`` ends, ``b`` is not ``a`` driven backwards, and
+    each is the other's single best match at that node (see :func:`_best_match`). Every
+    edge ends up in exactly one corridor.
+    """
+    # Sorted once, so every loop below and therefore the result is independent of input order.
+    edge_ids = sorted(way_of)
+    ends = {edge_id: _edge_ends(edge_id) for edge_id in edge_ids}
+    leaving: dict[str, list[str]] = {}
+    arriving: dict[str, list[str]] = {}
+    for edge_id in edge_ids:
+        start_node, end_node = ends[edge_id]
+        leaving.setdefault(start_node, []).append(edge_id)
+        arriving.setdefault(end_node, []).append(edge_id)
+
+    def is_reverse(first: str, second: str) -> bool:
+        return ends[first] == ends[second][::-1]
+
+    next_edge: dict[str, str] = {}
+    has_previous: set[str] = set()
+    for edge_id in edge_ids:
+        node = ends[edge_id][1]
+        onward = [e for e in leaving.get(node, []) if e != edge_id and not is_reverse(edge_id, e)]
+        candidate = _best_match(onward, way_of[edge_id], way_of)
+        if candidate is None:
+            continue
+        incoming = [
+            e for e in arriving.get(node, []) if e != candidate and not is_reverse(candidate, e)
+        ]
+        if _best_match(incoming, way_of[candidate], way_of) == edge_id:
+            next_edge[edge_id] = candidate
+            has_previous.add(candidate)
+
+    corridors: list[list[str]] = []
+    placed: set[str] = set()
+
+    def follow(first: str) -> None:
+        chain = [first]
+        placed.add(first)
+        while chain[-1] in next_edge and next_edge[chain[-1]] not in placed:
+            chain.append(next_edge[chain[-1]])
+            placed.add(chain[-1])
+        corridors.append(chain)
+
+    # Chains start at an edge nothing leads into; whatever is left forms closed loops,
+    # which start at their smallest edge ID.
+    for edge_id in edge_ids:
+        if edge_id not in has_previous:
+            follow(edge_id)
+    for edge_id in edge_ids:
+        if edge_id not in placed:
+            follow(edge_id)
+    return corridors
+
+
 def merge_edges_into_corridors(
     gdf_edges: gpd.GeoDataFrame,
     df_edge_scores: pd.DataFrame,
-    scenario: str = "baseline",
+    scenario: str | None = None,
 ) -> pd.DataFrame:
-    """Merge contiguous directed gap edges into readable corridors and rank.
+    """Merge gap edges that continue one another into corridors, then rank them.
+
+    Args:
+        gdf_edges: Table following ``EdgesSchema``. Only ``edge_id``, ``osm_way_id``
+            and ``length_m`` are read: IDs to check the scores against, OSM ways to keep
+            a corridor on its street at crossings, lengths to break score ties.
+        df_edge_scores: Output of ``detect_gaps_and_score_edges`` (``scenario``,
+            ``edge_id``, ``score``; other columns are ignored).
+        scenario: Merge only this scenario. ``None`` (default) merges every scenario
+            found in ``df_edge_scores``.
 
     Returns:
-        pd.DataFrame adhering to CorridorsSchema.
+        pd.DataFrame validated by ``CorridorsSchema`` with columns ``scenario``,
+        ``corridor_id``, ``edge_ids``, ``score``, ``rank``.
+
+    Rules:
+        1. Edge ``a`` joins edge ``b`` only when ``b`` starts at the node where ``a``
+           ends (``u-v-key`` then ``v-w-key``), so a corridor always travels in one
+           direction.
+        2. An edge is never joined to the same road in the opposite direction
+           (``u-v-key`` and ``v-u-key``), so both directions of a street stay separate
+           corridors.
+        3. Joins happen only where the way on is clear. Not counting the U-turn: if one
+           gap edge leaves the node, the corridor continues with it; if several leave (a
+           crossing or fork), it continues with the one on the same OSM way as the edge
+           it came from, if exactly one is. The same test runs backwards, so at a join
+           only the edge on the same OSM way may lead in. Otherwise the corridor ends
+           and each branch starts its own. This keeps a corridor on one street through
+           crossings with other gap streets, so a reader can name it.
+        4. ``edge_ids`` is a list in travel order, so the corridor can be drawn as one
+           line. Every gap edge belongs to exactly one corridor; an edge with no
+           neighbour is a corridor of one edge, and a closed loop starts at its smallest
+           edge ID.
+        5. Corridor ``score`` is the sum of its edges' scores, i.e. the total
+           volume x gap length x continuity factor along the corridor.
+        6. ``rank`` restarts at 1 in every scenario: highest score first, then the longer
+           corridor, then the corridor whose first edge ID sorts first.
+        7. ``corridor_id`` is ``corr_<scenario code>_<rank>`` (codes ``bl``, ``la``,
+           ``po``), the format of the sample fixture. Output is sorted by scenario, then
+           rank.
+
+    Raises:
+        ValueError: if required columns are missing, scores are null, negative or
+            duplicated per (scenario, edge_id), edge IDs are not ``u-v-key``, or a scored
+            edge is not in ``gdf_edges``.
     """
-    raise NotImplementedError("Corridor merging not implemented yet.")
+    _check_corridor_inputs(gdf_edges, df_edge_scores)
+    scores = pd.DataFrame(
+        {
+            "scenario": df_edge_scores["scenario"].astype(str).to_numpy(),
+            "edge_id": df_edge_scores["edge_id"].astype(str).to_numpy(),
+            "score": pd.to_numeric(df_edge_scores["score"]).to_numpy(dtype="float64"),
+        }
+    )
+    if scenario is not None:
+        scores = scores[scores["scenario"] == scenario]
+    if scores.empty:
+        return CorridorsSchema.validate(_empty_corridors())
+
+    edge_ids = gdf_edges["edge_id"].astype(str)
+    length = dict(zip(edge_ids, pd.to_numeric(gdf_edges["length_m"]).astype(float)))
+    way = dict(zip(edge_ids, gdf_edges["osm_way_id"]))
+    rows = []
+    for scenario_name, group in scores.groupby("scenario", sort=True):
+        edge_score = dict(zip(group["edge_id"], group["score"]))
+        corridors = [
+            (
+                sum(edge_score[e] for e in chain),
+                sum(length[e] for e in chain),
+                chain,
+            )
+            for chain in _chain_gap_edges({e: way[e] for e in edge_score})
+        ]
+        # Rule 6: score, then length, both descending; then the first edge ID.
+        corridors.sort(key=lambda c: (-c[0], -c[1], c[2][0]))
+        code = SCENARIO_CODES.get(scenario_name, scenario_name)
+        for rank, (score, _length, chain) in enumerate(corridors, start=1):
+            rows.append(
+                {
+                    "scenario": scenario_name,
+                    "corridor_id": f"corr_{code}_{rank:02d}",
+                    "edge_ids": chain,
+                    "score": score,
+                    "rank": rank,
+                }
+            )
+    return CorridorsSchema.validate(pd.DataFrame(rows, columns=CORRIDOR_COLUMNS))
+
+
+def _check_corridor_inputs(gdf_edges: pd.DataFrame, df_edge_scores: pd.DataFrame) -> None:
+    for name, table, columns in (
+        ("edges", gdf_edges, ("edge_id", "osm_way_id", "length_m")),
+        ("edge scores", df_edge_scores, CORRIDOR_SCORE_COLUMNS),
+    ):
+        missing = [c for c in columns if c not in table.columns]
+        if missing:
+            raise ValueError(f"{name} is missing required column(s): {missing}")
+    if df_edge_scores[list(CORRIDOR_SCORE_COLUMNS)].isna().any().any():
+        raise ValueError("edge scores must not contain null scenario, edge_id or score")
+    score = pd.to_numeric(df_edge_scores["score"], errors="coerce")
+    if score.isna().any() or (score < 0).any():
+        raise ValueError("edge scores must be numeric and non-negative")
+    duplicated = df_edge_scores.duplicated(subset=["scenario", "edge_id"])
+    if duplicated.any():
+        examples = df_edge_scores.loc[duplicated, ["scenario", "edge_id"]].head(5)
+        raise ValueError(
+            "edge scores must have one row per (scenario, edge_id); "
+            f"duplicates: {examples.to_dict('records')}"
+        )
+    edge_ids = df_edge_scores["edge_id"].astype(str)
+    malformed = edge_ids[~edge_ids.str.fullmatch(_EDGE_ID_PATTERN)]
+    if not malformed.empty:
+        raise ValueError(
+            "edge IDs must be directed 'u-v-key' IDs; "
+            f"invalid examples: {malformed.unique()[:5].tolist()}"
+        )
+    unknown = edge_ids[~edge_ids.isin(gdf_edges["edge_id"].astype(str))]
+    if not unknown.empty:
+        raise ValueError(
+            "edge scores contain edge IDs that are not in the edges table "
+            "(scores and edges must use the same frozen graph); "
+            f"examples: {unknown.unique()[:5].tolist()}"
+        )
