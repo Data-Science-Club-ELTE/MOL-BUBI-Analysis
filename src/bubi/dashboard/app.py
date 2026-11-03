@@ -14,11 +14,6 @@ from __future__ import annotations
 import json
 import math
 import os
-from dataclasses import dataclass, replace
-
-import folium
-import h3
-import pandas as pd
 import time
 from dataclasses import dataclass, replace
 from html import escape
@@ -200,11 +195,6 @@ def shift_right(lines: np.ndarray, distance: float) -> np.ndarray:
     normals = by_line.ffill().groupby(line_index).bfill().fillna(0.0).to_numpy()
     return shapely.linestrings(coords + distance * normals, indices=line_index)
 
-SCENARIO_HELP = {
-    "baseline": "Existing Futár stations only.",
-    "lane_aware": "Existing + proposed stations scored by population × lane connectivity.",
-    "population_only": "Existing + proposed stations scored by population only.",
-}
 
 def lane_status_geojson(edges: gpd.GeoDataFrame | None) -> str:
     """Every directed edge as GeoJSON text, grouped by lane status.
@@ -431,17 +421,6 @@ def build_map(
             notes.append(f"{skipped} population cell(s) have an invalid H3 id and are not drawn.")
 
     if settings.show_lanes and not edges.empty:
-        layer = folium.FeatureGroup(name="Bike-lane coverage")
-        for _, row in edges.iterrows():
-            has_lane = bool(row["has_dedicated_lane"])
-            folium.PolyLine(
-                offset_line(list(row.geometry.coords)),
-                color=LANE_COLOR if has_lane else NO_LANE_COLOR,
-                weight=4 if has_lane else 2.5,
-                opacity=0.85,
-                tooltip=f"Edge {row['edge_id']} · lane in this direction: {'yes' if has_lane else 'no'}",
-            ).add_to(layer)
-        layer.add_to(fmap)
         geojson = lane_geojson if lane_geojson is not None else lane_status_geojson(edges)
         fmap.add_child(LaneStatusLayer(geojson))
         legend.append((_line_swatch(LANE_COLOR, LANE_WEIGHT), "Bike lane in this direction"))
