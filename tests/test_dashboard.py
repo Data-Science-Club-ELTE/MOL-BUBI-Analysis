@@ -2,15 +2,35 @@
 
 import io
 import json
+import math
 import shutil
+from dataclasses import replace
 from pathlib import Path
 
+import folium
+import geopandas as gpd
+import h3
 import numpy as np
 import pandas as pd
 import pytest
+from shapely.geometry import LineString
 from streamlit.testing.v1 import AppTest
 
-from bubi.dashboard.app import export_csv, offset_line, route_volume_per_edge
+from bubi.dashboard.app import (
+    LANE_COLOR,
+    NO_LANE_COLOR,
+    LaneStatusLayer,
+    MapLegend,
+    Settings,
+    build_map,
+    export_csv,
+    lane_status_geojson,
+    legend_html,
+    map_bounds,
+    offset_line,
+    route_volume_per_edge,
+    shift_right,
+)
 from bubi.dashboard.data import (
     DATA_DIR_ENV,
     OPTIONAL_TABLES,
@@ -153,6 +173,214 @@ def test_route_volume_per_edge(sample_routes):
     assert volumes["n1-n3-0"] == 210.0
 
 
+# ---------------------------------------------------------------- week 2: baseline map
+
+ALL_LAYERS = Settings(
+    scenario="baseline",
+    basemap="OpenStreetMap",
+    show_stations=True,
+    show_proposed=True,
+    show_population=False,
+    show_lanes=True,
+    show_routes=False,
+    show_corridors=True,
+    top_n=10,
+)
+
+
+def two_way_street(lane_forward: bool, lane_back: bool) -> gpd.GeoDataFrame:
+    """One east-west street near Deák tér, stored as two directed edges."""
+    line = LineString([(19.050, 47.497), (19.060, 47.497)])
+    return gpd.GeoDataFrame(
+        {
+            "edge_id": ["a-b-0", "b-a-0"],
+            "osm_way_id": [1, 1],
+            "length_m": [750.0, 750.0],
+            "has_dedicated_lane": [lane_forward, lane_back],
+        },
+        geometry=[line, line.reverse()],
+        crs="EPSG:4326",
+    )
+
+
+def layers_of(fmap: folium.Map, kind: type) -> list:
+    return [child for child in fmap._children.values() if isinstance(child, kind)]
+
+
+def all_children(element) -> list:
+    found = []
+    for child in element._children.values():
+        found.append(child)
+        found.extend(all_children(child))
+    return found
+
+
+def lines_by_status(geojson_text: str) -> dict[str, list]:
+    """Parse lane_status_geojson output into {"yes"/"no": list of line coordinate lists}."""
+    geojson = json.loads(geojson_text)
+    assert geojson["type"] == "FeatureCollection"
+    return {f["properties"]["lane"]: f["geometry"]["coordinates"] for f in geojson["features"]}
+
+
+def test_lane_geojson_groups_directions_by_their_own_lane_status():
+    lines = lines_by_status(lane_status_geojson(two_way_street(lane_forward=True, lane_back=False)))
+
+    # One feature per status, each holding one line per directed edge.
+    assert set(lines) == {"yes", "no"}
+    assert len(lines["yes"]) == 1 and len(lines["no"]) == 1
+
+
+def test_lane_geojson_draws_each_direction_on_its_right_side():
+    lines = lines_by_status(lane_status_geojson(two_way_street(True, False)))
+
+    # a-b-0 (lane) runs east, so its right-hand side is south; b-a-0 (no lane) runs west.
+    east_lat = lines["yes"][0][0][1]
+    west_lat = lines["no"][0][0][1]
+    assert east_lat < 47.497 < west_lat
+    gap_m = (west_lat - east_lat) * 111_320
+    assert 7.0 < gap_m < 9.0  # 4 m each side, within the ~1 m rounding
+
+
+def test_lane_geojson_rounds_coordinates_to_about_one_metre():
+    lines = lines_by_status(lane_status_geojson(two_way_street(True, True)))
+    for lon, lat in lines["yes"][0]:
+        assert round(lon, 5) == lon and round(lat, 5) == lat
+
+
+def test_lane_geojson_of_no_edges_is_empty():
+    empty = two_way_street(True, True).iloc[0:0]
+    assert json.loads(lane_status_geojson(empty)) == {"type": "FeatureCollection", "features": []}
+
+
+def test_shift_right_moves_a_line_to_the_right_of_travel():
+    east = LineString([(0, 0), (10, 0), (20, 0)])
+    north = LineString([(0, 0), (0, 10)])
+
+    shifted_east, shifted_north = shift_right(np.array([east, north]), 4.0)
+
+    assert list(shifted_east.coords) == [(0, -4), (10, -4), (20, -4)]
+    assert list(shifted_north.coords) == [(4, 0), (4, 10)]
+
+
+def test_shift_right_keeps_repeated_points_in_place_of_crashing():
+    line = LineString([(0, 0), (0, 0), (10, 0)])
+    (shifted,) = shift_right(np.array([line]), 2.0)
+    assert list(shifted.coords) == [(0, -2), (0, -2), (10, -2)]
+
+
+def test_edges_are_one_geojson_layer_not_one_line_per_edge(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    settings = replace(ALL_LAYERS, show_stations=False, show_proposed=False, show_corridors=False)
+
+    fmap, _ = build_map(data, settings)
+
+    lane_layers = layers_of(fmap, LaneStatusLayer)
+    assert len(lane_layers) == 1
+    lines = lines_by_status(lane_layers[0].geojson)
+    assert sum(len(parts) for parts in lines.values()) == len(data.get("edges"))
+    assert not any(isinstance(c, folium.PolyLine) for c in all_children(fmap))
+    assert "L.geoJson(" in fmap.get_root().render()
+
+
+def test_stations_are_one_geojson_layer(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    settings = replace(ALL_LAYERS, show_lanes=False, show_proposed=False, show_corridors=False)
+
+    fmap, _ = build_map(data, settings)
+
+    station_layers = layers_of(fmap, folium.GeoJson)
+    assert len(station_layers) == 1
+    assert len(station_layers[0].data["features"]) == len(data.get("stations"))
+    assert not any(isinstance(c, folium.CircleMarker) for c in all_children(fmap))
+
+
+def test_lane_colours_are_chosen_in_the_browser(fixtures_dir: Path):
+    fmap, _ = build_map(load_dashboard_data(fixtures_dir), ALL_LAYERS)
+    html = fmap.get_root().render()
+
+    # No per-edge style table in the page: one JS function picks the colour.
+    assert "_styler" not in html
+    assert LANE_COLOR in html and NO_LANE_COLOR in html
+    assert "preferCanvas" in html
+
+
+def test_legend_explains_the_lane_colours(fixtures_dir: Path):
+    fmap, _ = build_map(load_dashboard_data(fixtures_dir), ALL_LAYERS)
+
+    legends = layers_of(fmap, MapLegend)
+    assert len(legends) == 1
+    html = legends[0].html
+    assert "Bike lane in this direction" in html and LANE_COLOR in html
+    assert "No bike lane in this direction" in html and NO_LANE_COLOR in html
+    assert "right-hand side of travel" in html
+    assert "Existing station" in html
+
+
+def test_legend_lists_only_layers_that_are_shown(fixtures_dir: Path):
+    settings = replace(ALL_LAYERS, show_lanes=False, show_proposed=False, show_corridors=False)
+    fmap, _ = build_map(load_dashboard_data(fixtures_dir), settings)
+
+    html = layers_of(fmap, MapLegend)[0].html
+    assert "Existing station" in html
+    assert "bike lane" not in html.lower()
+
+
+def test_legend_html_escapes_labels():
+    assert "&lt;b&gt;" in legend_html([("", "<b>")])
+
+
+@pytest.mark.parametrize(
+    ("toggle", "layer_name"),
+    [("show_lanes", "Bike-lane status"), ("show_stations", "Existing stations")],
+)
+def test_layer_toggles_remove_the_layer(fixtures_dir: Path, toggle: str, layer_name: str):
+    data = load_dashboard_data(fixtures_dir)
+
+    shown, _ = build_map(data, ALL_LAYERS)
+    hidden, _ = build_map(data, replace(ALL_LAYERS, **{toggle: False}))
+
+    def names(fmap):
+        return {getattr(c, "layer_name", None) for c in fmap._children.values()}
+
+    assert layer_name in names(shown)
+    assert layer_name not in names(hidden)
+
+
+def test_proposed_stations_sit_on_the_h3_cell_centre(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    fmap, _ = build_map(data, replace(ALL_LAYERS, scenario="lane_aware"))
+
+    markers = [c for c in all_children(fmap) if isinstance(c, folium.RegularPolygonMarker)]
+    expected = {
+        h3.cell_to_latlng(cell) for cell in proposed_stations(data, "lane_aware")["cell_id"]
+    }
+    assert markers
+    for marker in markers:
+        lat, lon = marker.location
+        assert any(
+            math.isclose(lat, e_lat) and math.isclose(lon, e_lon) for e_lat, e_lon in expected
+        )
+
+
+def test_map_opens_on_every_station_and_edge(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    stations, edges = data.get("stations"), data.get("edges")
+
+    (south, west), (north, east) = map_bounds(stations, edges)
+
+    min_lon, min_lat, max_lon, max_lat = edges.total_bounds
+    assert south <= min(stations["lat"].min(), min_lat)
+    assert north >= max(stations["lat"].max(), max_lat)
+    assert west <= min(stations["lon"].min(), min_lon)
+    assert east >= max(stations["lon"].max(), max_lon)
+    fmap, _ = build_map(data, ALL_LAYERS)
+    assert "fitBounds" in fmap.get_root().render()
+
+
+def test_map_bounds_without_data_is_none():
+    assert map_bounds(None, None) is None
+
+
 # ---------------------------------------------------------------- app
 
 
@@ -168,6 +396,20 @@ def test_app_runs_on_fixtures(monkeypatch, fixtures_dir: Path):
     assert not at.error
     assert len(at.metric) == 4
     assert any("is read from test data" in c.value for c in at.caption)
+
+
+def test_app_reports_map_preparation_time(monkeypatch, fixtures_dir: Path):
+    at = _run_app(monkeypatch, fixtures_dir)
+    assert any("directed street edges" in c.value for c in at.caption)
+
+
+@pytest.mark.parametrize("label", ["Bike-lane coverage", "Existing stations"])
+def test_app_layer_toggles_run(monkeypatch, fixtures_dir: Path, label: str):
+    at = _run_app(monkeypatch, fixtures_dir)
+    toggle = next(box for box in at.sidebar.checkbox if box.label == label)
+    toggle.uncheck().run()
+    assert not at.exception
+    assert not at.error
 
 
 def test_app_runs_with_light_basemap(monkeypatch, fixtures_dir: Path):

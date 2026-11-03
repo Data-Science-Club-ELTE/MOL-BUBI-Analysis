@@ -23,6 +23,7 @@ from collections.abc import Callable
 import pandas as pd
 
 from bubi.contracts.schemas import RoutesSchema
+from bubi.corridors.scoring import calculate_edge_route_volumes
 
 LOCAL_TZ = "Europe/Budapest"
 # Real trips can only use stations that exist today, which is the baseline scenario.
@@ -39,6 +40,7 @@ ROUTE_COLUMNS = (
     "edges",
     "trip_count",
 )
+TOTALS_COLUMNS = ["scenario", "route_type", "routes", "trips", "edges", "volume"]
 SAMPLE_SIZE = 10
 
 _OFFSET_SUFFIX = re.compile(r"(?:Z|[+-]\d{2}:?\d{2})$")
@@ -54,8 +56,14 @@ def map_match_trace(points: pd.DataFrame) -> list[str]:
     """PLACEHOLDER: map-match one GPS trace to an ordered list of directed ``edge_id`` s.
 
     To be completed by CS 2 following the geoinformatics member's map-matching plan.
-    ``points`` holds one trip's GPS points sorted by ``timestamp_utc``. The result must
-    use ``edges.edge_id`` values; an empty list means the trace could not be matched.
+    Contract with the converter (``src/bubi/ingestion/README.md`` section 8.1):
+
+    - ``points`` holds one trip's valid GPS points, sorted by ``timestamp_utc``, with
+      columns ``trip_id``, ``timestamp``, ``lat``, ``lon``, ``timestamp_utc`` and a
+      0-based index.
+    - The result lists directed ``edges.edge_id`` values (``u-v-key``) in travel order.
+    - An empty list means the trace could not be matched; the converter counts the trip
+      under ``unmatched_trace``. Exceptions are not caught and stop the conversion.
     """
     raise NotImplementedError(
         "Map-matching is a placeholder: CS 2 implements it with the geoinformatics plan."
@@ -148,6 +156,7 @@ def convert_observed_routes(
     gps_points: pd.DataFrame,
     stations: pd.DataFrame,
     matcher: MapMatcher = map_match_trace,
+    edges: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     """Convert trips and GPS points into observed ``routes`` rows.
 
@@ -155,6 +164,10 @@ def convert_observed_routes(
     remaining trip's GPS trace with ``matcher``, then merge identical routes by summing
     ``trip_count``. Each dropped trip is counted in the report under the step that
     dropped it.
+
+    If ``edges`` is given, a trip whose matched route uses an ``edge_id`` missing from
+    it is dropped and counted under ``unknown_edge``. The volume step only checks the
+    ``u-v-key`` form, so without this check such IDs would reach the volumes unnoticed.
 
     Returns:
         (routes validated by ``RoutesSchema`` with ``edges`` as lists, report dict)
@@ -169,27 +182,39 @@ def convert_observed_routes(
     invalid_points = points["timestamp_utc"].isna()
     points = points.loc[~invalid_points].sort_values(["trip_id", "timestamp_utc"], kind="stable")
     traces = {trip_id: group for trip_id, group in points.groupby("trip_id", sort=False)}
+    known_edges = None
+    if edges is not None:
+        _require_columns(edges, ("edge_id",), "edges")
+        known_edges = set(edges["edge_id"].astype(str))
 
     rows = []
     converted_hours: list[int] = []
     no_gps: list[str] = []
     unmatched_trace: list[str] = []
+    unknown_edge: list[str] = []
+    unknown_edge_ids: set[str] = set()
     for trip in matched.itertuples(index=False):
         trace = traces.get(trip.trip_id)
         if trace is None:
             no_gps.append(trip.trip_id)
             continue
-        edges = [str(edge_id) for edge_id in matcher(trace.reset_index(drop=True))]
-        if not edges:
+        route_edges = [str(edge_id) for edge_id in matcher(trace.reset_index(drop=True))]
+        if not route_edges:
             unmatched_trace.append(trip.trip_id)
             continue
+        if known_edges is not None:
+            missing = set(route_edges) - known_edges
+            if missing:
+                unknown_edge.append(trip.trip_id)
+                unknown_edge_ids |= missing
+                continue
         rows.append(
             {
                 "scenario": OBSERVED_SCENARIO,
                 "start_station_id": trip.start_station_id,
                 "end_station_id": trip.end_station_id,
                 "route_type": ROUTE_TYPE,
-                "edges": edges,
+                "edges": route_edges,
                 "trip_count": 1.0,
             }
         )
@@ -209,12 +234,42 @@ def convert_observed_routes(
         "no_gps_trip_ids": no_gps[:SAMPLE_SIZE],
         "unmatched_trace": len(unmatched_trace),
         "unmatched_trace_trip_ids": unmatched_trace[:SAMPLE_SIZE],
+        "unknown_edge": len(unknown_edge),
+        "unknown_edge_trip_ids": unknown_edge[:SAMPLE_SIZE],
+        "unknown_edge_ids": sorted(unknown_edge_ids)[:SAMPLE_SIZE],
         "invalid_gps_points": int(invalid_points.sum()),
         "converted_trips": len(converted_hours),
         "routes": len(routes),
         "trips_by_local_hour": dict(sorted(Counter(converted_hours).items())),
     }
     return routes, report
+
+
+def volume_totals_by_route_type(routes: pd.DataFrame) -> pd.DataFrame:
+    """Total trips and edge volume per scenario and route type.
+
+    The volume step sums synthetic and observed routes of one scenario together, so it
+    is run here on each (scenario, route type) group to keep the two sources apart.
+
+    Returns:
+        One row per (scenario, route_type) with ``routes`` (row count), ``trips`` (sum
+        of ``trip_count``), ``edges`` (directed edges with volume) and ``volume`` (sum of
+        edge volumes), sorted by scenario and route type.
+    """
+    rows = []
+    for (scenario, route_type), group in routes.groupby(["scenario", "route_type"], sort=True):
+        volumes = calculate_edge_route_volumes(group)
+        rows.append(
+            {
+                "scenario": scenario,
+                "route_type": route_type,
+                "routes": len(group),
+                "trips": float(group["trip_count"].sum()),
+                "edges": len(volumes),
+                "volume": float(volumes["volume"].sum()),
+            }
+        )
+    return pd.DataFrame(rows, columns=TOTALS_COLUMNS)
 
 
 def _require_columns(df: pd.DataFrame, columns: tuple[str, ...], name: str) -> None:
