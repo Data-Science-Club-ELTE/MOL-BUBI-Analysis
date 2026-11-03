@@ -1,4 +1,4 @@
-.PHONY: install test lint format fixtures dashboard run-pipeline clean
+.PHONY: install test lint format fixtures dashboard measure-dashboard run-pipeline clean
 
 VENV = .venv
 PYTHON = $(VENV)/bin/python
@@ -25,6 +25,9 @@ run-pipeline:
 
 dashboard:
 	$(PYTHON) -m streamlit run src/bubi/dashboard/app.py
+
+measure-dashboard:
+	$(PYTHON) scripts/measure_dashboard_load.py $(MEASURE_ARGS)
 
 clean:
 	rm -rf $(VENV) .pytest_cache .ruff_cache __pycache__ build dist *.egg-info
