@@ -1,15 +1,22 @@
-"""Tests for detect_gaps_and_score_edges (issue #21).
+"""Tests for detect_gaps_and_score_edges (issue #21) and merge_edges_into_corridors (#37).
 
-Every expected score below is worked out by hand as volume x length_m x continuity_factor.
+Every expected edge score is worked out by hand as volume x length_m x continuity_factor;
+every corridor score as the sum of its edges' scores.
 """
+
+import random
 
 import geopandas as gpd
 import pandas as pd
 import pytest
 from shapely.geometry import LineString
 
-from bubi.contracts.schemas import EdgeScoresSchema
-from bubi.corridors import calculate_edge_route_volumes, detect_gaps_and_score_edges
+from bubi.contracts.schemas import CorridorsSchema, EdgeScoresSchema
+from bubi.corridors import (
+    calculate_edge_route_volumes,
+    detect_gaps_and_score_edges,
+    merge_edges_into_corridors,
+)
 
 
 def make_edges(rows):
@@ -184,3 +191,230 @@ def test_repo_fixtures_end_to_end(sample_edges, sample_routes):
 
     assert row_of(result, "n1-n3-0", "lane_aware")["score"] == 95 * 720
     assert row_of(result, "n1-n5-0", "population_only")["score"] == 140 * 950
+
+
+# ---------------------------------------------------------------- corridors (#37)
+
+
+def gap_network(rows):
+    """rows: (edge_id, length_m, score[, osm_way_id]) -> (edges, baseline edge scores).
+
+    Edges without a way ID all get way 1.
+    """
+    rows = [row if len(row) == 4 else (*row, 1) for row in rows]
+    edges = make_edges([(edge_id, length, False) for edge_id, length, _, _ in rows])
+    edges["osm_way_id"] = [way for *_, way in rows]
+    scores = pd.DataFrame(
+        {
+            "scenario": "baseline",
+            "edge_id": [edge_id for edge_id, *_ in rows],
+            "volume": 1.0,
+            "score": [float(score) for _, _, score, _ in rows],
+            "rank": range(1, len(rows) + 1),
+        }
+    )
+    return edges, scores
+
+
+def corridor_list(result, scenario="baseline"):
+    """[(edge_ids, score, rank)] of one scenario, in rank order."""
+    rows = result[result["scenario"] == scenario]
+    return [(list(r.edge_ids), r.score, r.rank) for r in rows.itertuples()]
+
+
+def test_chain_of_three_becomes_one_corridor_in_travel_order():
+    # a -> b -> c -> d, given out of order.
+    edges, scores = gap_network([("c-d-0", 30, 3), ("a-b-0", 10, 1), ("b-c-0", 20, 2)])
+
+    result = merge_edges_into_corridors(edges, scores)
+
+    assert corridor_list(result) == [(["a-b-0", "b-c-0", "c-d-0"], 6.0, 1)]
+
+
+def test_fork_without_a_clear_street_ends_the_corridor():
+    # a -> b, then b -> c and b -> d, all on the same OSM way: no single way on.
+    edges, scores = gap_network([("a-b-0", 10, 5), ("b-c-0", 10, 4), ("b-d-0", 10, 3)])
+
+    result = merge_edges_into_corridors(edges, scores)
+
+    assert corridor_list(result) == [(["a-b-0"], 5.0, 1), (["b-c-0"], 4.0, 2), (["b-d-0"], 3.0, 3)]
+
+
+def test_at_a_crossing_each_corridor_stays_on_its_own_street():
+    # Main street (way 1) a -> b -> c crosses side street (way 2) x -> b -> y at b.
+    edges, scores = gap_network(
+        [
+            ("a-b-0", 10, 4, 1),
+            ("b-c-0", 10, 4, 1),
+            ("x-b-0", 10, 1, 2),
+            ("b-y-0", 10, 1, 2),
+        ]
+    )
+
+    result = merge_edges_into_corridors(edges, scores)
+
+    assert corridor_list(result) == [(["a-b-0", "b-c-0"], 8.0, 1), (["x-b-0", "b-y-0"], 2.0, 2)]
+
+
+def test_at_a_fork_the_corridor_follows_its_own_street():
+    # a -> b -> c is one street (way 1); b -> d branches off (way 2).
+    edges, scores = gap_network([("a-b-0", 10, 1, 1), ("b-c-0", 10, 1, 1), ("b-d-0", 10, 5, 2)])
+
+    result = merge_edges_into_corridors(edges, scores)
+
+    assert corridor_list(result) == [(["b-d-0"], 5.0, 1), (["a-b-0", "b-c-0"], 2.0, 2)]
+
+
+def test_join_ends_the_corridor_too():
+    # a -> c and b -> c meet, then c -> d.
+    edges, scores = gap_network([("a-c-0", 10, 1), ("b-c-0", 10, 2), ("c-d-0", 10, 3)])
+
+    result = merge_edges_into_corridors(edges, scores)
+
+    assert [ids for ids, _, _ in corridor_list(result)] == [["c-d-0"], ["b-c-0"], ["a-c-0"]]
+
+
+def test_two_directions_of_a_road_stay_separate_corridors():
+    # Two-way street a - b - c without a lane in either direction.
+    edges, scores = gap_network(
+        [("a-b-0", 10, 1), ("b-c-0", 10, 2), ("c-b-0", 10, 4), ("b-a-0", 10, 8)]
+    )
+
+    result = merge_edges_into_corridors(edges, scores)
+
+    assert corridor_list(result) == [
+        (["c-b-0", "b-a-0"], 12.0, 1),
+        (["a-b-0", "b-c-0"], 3.0, 2),
+    ]
+
+
+def test_an_edge_is_never_joined_to_its_own_reverse():
+    # A dead end: a -> b and back b -> a would be a U-turn.
+    edges, scores = gap_network([("a-b-0", 10, 1), ("b-a-0", 10, 2)])
+
+    result = merge_edges_into_corridors(edges, scores)
+
+    assert [ids for ids, _, _ in corridor_list(result)] == [["b-a-0"], ["a-b-0"]]
+
+
+def test_closed_loop_starts_at_its_smallest_edge_id():
+    edges, scores = gap_network([("b-c-0", 10, 1), ("c-a-0", 10, 1), ("a-b-0", 10, 1)])
+
+    result = merge_edges_into_corridors(edges, scores)
+
+    assert corridor_list(result) == [(["a-b-0", "b-c-0", "c-a-0"], 3.0, 1)]
+
+
+def test_ties_are_broken_by_length_then_first_edge_id():
+    edges, scores = gap_network(
+        [
+            ("p-q-0", 10, 5),  # score 5, 10 m
+            ("x-y-0", 50, 5),  # score 5, 50 m: longer, so ahead of p-q-0
+            ("m-n-0", 10, 5),  # score 5, 10 m: same as p-q-0, m sorts first
+        ]
+    )
+
+    result = merge_edges_into_corridors(edges, scores)
+
+    assert [ids[0] for ids, _, _ in corridor_list(result)] == ["x-y-0", "m-n-0", "p-q-0"]
+
+
+def test_result_does_not_depend_on_input_order():
+    rows = [("a-b-0", 10, 1), ("b-c-0", 10, 2), ("c-d-0", 10, 1), ("b-e-0", 10, 7)]
+    rows += [("x-y-0", 10, 4), ("y-x-0", 10, 4), ("q-r-0", 10, 4)]
+    edges, scores = gap_network(rows)
+    expected = merge_edges_into_corridors(edges, scores)
+
+    for seed in range(5):
+        shuffled = scores.sample(frac=1, random_state=seed)
+        result = merge_edges_into_corridors(edges, shuffled)
+        pd.testing.assert_frame_equal(result, expected)
+
+
+def test_ranks_and_ids_restart_per_scenario():
+    edges, scores = gap_network([("a-b-0", 10, 1), ("c-d-0", 10, 2)])
+    lane_aware = scores.assign(scenario="lane_aware", score=[9.0, 1.0])
+    both = pd.concat([scores, lane_aware], ignore_index=True)
+
+    result = merge_edges_into_corridors(edges, both)
+
+    assert result["corridor_id"].tolist() == [
+        "corr_bl_01",
+        "corr_bl_02",
+        "corr_la_01",
+        "corr_la_02",
+    ]
+    assert result["rank"].tolist() == [1, 2, 1, 2]
+    # baseline: c-d-0 (2) beats a-b-0 (1); lane_aware: a-b-0 (9) beats c-d-0 (1).
+    assert [list(ids) for ids in result["edge_ids"]] == [["c-d-0"], ["a-b-0"], ["a-b-0"], ["c-d-0"]]
+
+
+def test_scenario_argument_merges_only_that_scenario():
+    edges, scores = gap_network([("a-b-0", 10, 1)])
+    both = pd.concat([scores, scores.assign(scenario="lane_aware")], ignore_index=True)
+
+    result = merge_edges_into_corridors(edges, both, scenario="lane_aware")
+
+    assert result["scenario"].tolist() == ["lane_aware"]
+
+
+def test_every_edge_lands_in_exactly_one_connected_one_way_corridor():
+    rng = random.Random(7)
+    nodes = [f"n{i}" for i in range(12)]
+    pairs = {(u, v) for u in nodes for v in nodes if u != v and rng.random() < 0.15}
+    rows = [(f"{u}-{v}-0", rng.randint(5, 50), rng.randint(0, 9)) for u, v in sorted(pairs)]
+    edges, scores = gap_network(rows)
+
+    result = merge_edges_into_corridors(edges, scores)
+
+    all_ids = [e for ids in result["edge_ids"] for e in ids]
+    assert sorted(all_ids) == sorted(scores["edge_id"])
+    for ids in result["edge_ids"]:
+        for first, second in zip(ids, ids[1:]):
+            u1, v1, _ = first.split("-")
+            u2, v2, _ = second.split("-")
+            assert v1 == u2  # end to end, same direction of travel
+            assert (u2, v2) != (v1, u1)  # never the same road backwards
+
+
+def test_no_gap_edges_gives_an_empty_valid_table():
+    edges, scores = gap_network([("a-b-0", 10, 1)])
+
+    result = merge_edges_into_corridors(edges, scores.iloc[0:0])
+
+    assert result.empty
+    assert list(result.columns) == ["scenario", "corridor_id", "edge_ids", "score", "rank"]
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (lambda s: s.assign(edge_id=["x-y-0"]), "not in the edges table"),
+        (lambda s: pd.concat([s, s]), "one row per"),
+        (lambda s: s.assign(edge_id=["not-an-id"]), "u-v-key"),
+        (lambda s: s.assign(score=[-1.0]), "non-negative"),
+        (lambda s: s.drop(columns="score"), "missing required column"),
+    ],
+)
+def test_bad_edge_scores_raise_clear_errors(change, message):
+    edges, scores = gap_network([("a-b-0", 10, 1)])
+
+    with pytest.raises(ValueError, match=message):
+        merge_edges_into_corridors(edges, change(scores))
+
+
+def test_repo_fixtures_corridors_end_to_end(sample_edges, sample_routes):
+    """Week 1 volumes -> week 2 gap scores -> corridors, on the repo fixtures."""
+    scores = detect_gaps_and_score_edges(sample_edges, calculate_edge_route_volumes(sample_routes))
+
+    result = merge_edges_into_corridors(sample_edges, scores)
+
+    CorridorsSchema.validate(result)
+    # n2-n1-0 ends at n1, where two gap edges leave (n1-n3-0 and n1-n5-0): a fork,
+    # so all three stay separate corridors.
+    assert corridor_list(result) == [
+        (["n1-n5-0"], 180 * 950, 1),
+        (["n1-n3-0"], 210 * 720, 2),
+        (["n2-n1-0"], 115 * 450, 3),
+    ]
+    assert result.loc[result["scenario"] == "lane_aware", "corridor_id"].tolist() == ["corr_la_01"]
