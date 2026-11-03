@@ -29,12 +29,17 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import yaml
 from pandera.errors import SchemaError, SchemaErrors
 
 from bubi.contracts.io import SCHEMA_REGISTRY, load_contract_table, save_contract_table
-from bubi.corridors import calculate_edge_route_volumes
+from bubi.corridors import (
+    calculate_edge_route_volumes,
+    detect_gaps_and_score_edges,
+    merge_edges_into_corridors,
+)
 from bubi.demand import generate_synthetic_trips
 from bubi.ingestion import ingest_futar_stations
 from bubi.ingestion.futar_snapshot import IngestionError
@@ -102,6 +107,23 @@ def _run_volumes(inputs: list[Path], config: dict) -> pd.DataFrame:
     return calculate_edge_route_volumes(load_contract_table("routes", routes_path))
 
 
+def _run_scores(inputs: list[Path], config: dict) -> pd.DataFrame:
+    edges_path, volumes_path = inputs
+    # The continuity factor keeps its default of 1.0 until it is defined (design doc 7.1).
+    return detect_gaps_and_score_edges(
+        load_contract_table("edges", edges_path),
+        load_contract_table("edge_scores", volumes_path, validate=False),
+    )
+
+
+def _run_corridors(inputs: list[Path], config: dict) -> pd.DataFrame:
+    edges_path, scores_path = inputs
+    return merge_edges_into_corridors(
+        load_contract_table("edges", edges_path),
+        load_contract_table("edge_scores", scores_path),
+    )
+
+
 def build_stages(config: dict) -> list[Stage]:
     """Declare every stage in dependency order."""
     raw_dir = config["paths"]["data_raw_dir"]
@@ -141,13 +163,13 @@ def build_stages(config: dict) -> list[Stage]:
             run=_run_volumes,
             columns=("scenario", "edge_id", "volume"),
         ),
-        Stage("scores", (edges, volumes), scores, "edge_scores", blocked_by="#21"),
+        Stage("scores", (edges, volumes), scores, "edge_scores", run=_run_scores),
         Stage(
             "corridors",
             (edges, scores),
             f"{PROCESSED}/corridors.parquet",
             "corridors",
-            blocked_by="#37",
+            run=_run_corridors,
         ),
     ]
 
@@ -262,7 +284,21 @@ def _same_as_existing(stage: Stage, df: pd.DataFrame, output: Path) -> bool:
         existing = _validate(stage, _read(stage, output))
     except STAGE_ERRORS:
         return False  # an invalid old file is replaced by the new, validated table
-    return existing.reset_index(drop=True).equals(df.reset_index(drop=True))
+    return _comparable(existing).equals(_comparable(df))
+
+
+def _comparable(df: pd.DataFrame) -> pd.DataFrame:
+    """``df`` with list-like cells as tuples, so a table compares equal after a round trip.
+
+    Parquet stores list cells (``corridors.edge_ids``, ``routes.edges``) as lists but reads
+    them back as NumPy arrays, which never compare equal to the lists just computed.
+    """
+    list_like = (list, tuple, np.ndarray)
+    out = df.reset_index(drop=True)
+    for column in out.columns:
+        if pd.api.types.is_object_dtype(out[column]):
+            out[column] = out[column].map(lambda v: tuple(v) if isinstance(v, list_like) else v)
+    return out
 
 
 def format_report(results: list[StageResult]) -> str:

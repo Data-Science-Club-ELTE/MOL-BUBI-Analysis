@@ -128,6 +128,15 @@ corridors   BLOCKED   data/processed/corridors.parquet  module not implemented y
 
 The `trips` and `volumes` stages run once their inputs exist. `tests/test_run_pipeline.py` runs them on the sample population and routes fixtures.
 
+Since #21 and #37 the `scores` stage runs `detect_gaps_and_score_edges` (continuity factor 1.0 until it is defined) and the `corridors` stage runs `merge_edges_into_corridors`. Both are no longer blocked by their own issue; they wait only on their inputs. With the same inputs as above, their lines now read:
+
+```text
+scores      BLOCKED   data/processed/edge_scores.parquet  upstream: edges (#15), volumes (via routes (#36))
+corridors   BLOCKED   data/processed/corridors.parquet  upstream: edges (#15), scores (via edges (#15), volumes (via routes (#36)))
+```
+
+`tests/test_run_pipeline.py` runs both on the sample edges and routes fixtures and checks that a second run rewrites nothing. List cells, such as `corridors.edge_ids`, come back from Parquet as NumPy arrays, so the "unchanged" check compares them as tuples.
+
 ### 10.5 Reproducibility check
 
 ```bash
