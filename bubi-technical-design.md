@@ -513,7 +513,7 @@ Things that could go wrong during the project, with how each is handled.
 | Real trip/GPS data may be unavailable or late | Fully synthetic trips and routes by design; contract deadline for real data; outputs clearly labelled |
 | The Futár API provides no historical trip data (only a live station list) | Stations come from Futár; trips are generated; real data is plugged in if obtained from another source |
 | Futár snapshot contents change between requests | Treat each snapshot as immutable, record retrieval metadata, and freeze one snapshot in config; `stations.snapshot_date` is `2026-10-18` |
-| BKK licensing and redistribution terms are unresolved | Record the open status in the source inventory; keep raw snapshots out of git; review the committed processed station table against the terms before a public release |
+| BKK data must be attributed under CC BY 4.0 (terms confirmed 2026-11-04) | Show "Data source: BKK Zrt., CC BY 4.0" on the dashboard and in any published output; keep raw snapshots out of git for size and reproducibility |
 | Straight-line distance stands in for walking and network distance | Labelled as a lower bound (D15); replace with walking-graph and routed distance when §6.2 and §6.4 land; avoid claiming precise walking coverage |
 | Network, population, routing, and gap-scoring modules are missing, so no end-to-end pipeline exists | Modules are isolated behind the frozen contract and fixtures; module-level tests; §3.1 makes the gap explicit rather than implying a working pipeline |
 | Dashboard proposed-station markers are placeholders | Demo mode is labelled; bind markers to H3 cell centres before any external demo |
@@ -548,8 +548,8 @@ Built-in boundaries of what the results can claim; each is documented in the met
 ### 14.1 Data, access, and licensing
 
 - Ratify the real-data acceptance deadline (proposed: end of week 4) and record what happens if no data arrives.
-- Obtain BKK's approval for the Futár API key. The key works, but the portal says it may be used only after approval, which has not arrived; BKK was asked by email on 2026-10-26. No new requests are made until then (`docs/ingestion_notes.md` §1).
-- Resolve BKK Futár licensing, attribution, and raw-snapshot redistribution terms (`docs/source_inventory.md` marks them unresolved).
+- ~~Obtain BKK's approval for the Futár API key.~~ Resolved 2026-11-04: BKK confirmed the key was approved automatically; requests at most every 5 seconds are acceptable (`docs/ingestion_notes.md` §1).
+- ~~Resolve BKK Futár licensing, attribution, and raw-snapshot redistribution terms.~~ Resolved 2026-11-04: CC BY 4.0, attribution "Data source: BKK Zrt., CC BY 4.0" (`docs/source_inventory.md` §4). Remaining work: show the attribution on the dashboard.
 - Record the OSM extract date and store or document the frozen graph artifact behind the `budapest_osm_2026w1` label.
 - Confirm the exact DEM product and version behind `copernicus_dem_30m`.
 - Confirm the population product, year, and licence: config names `worldpop_2026_100m`, while the source inventory still lists WorldPop versus GHSL as unresolved.

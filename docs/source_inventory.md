@@ -7,7 +7,7 @@ Unconfirmed items are marked **UNRESOLVED** rather than assumed.
 | OpenStreetMap (via OSMnx) | `edges` | ODbL 1.0 | Yes | Free, no key | Confirmed |
 | WorldPop | `population` | CC BY 4.0 | Yes | Free, no key | Confirmed |
 | GHSL GHS-POP (EC JRC) | `population` | CC BY 4.0 | Yes | Free, no key | Confirmed |
-| BKK FUTÁR API | `stations` | **UNRESOLVED** | **UNRESOLVED** | Free API key required | Partly unresolved |
+| BKK FUTÁR API | `stations` | CC BY 4.0 | Yes | Free API key required (approved) | Confirmed by BKK, 2026-11-04 |
 
 ---
 
@@ -46,14 +46,14 @@ Unconfirmed items are marked **UNRESOLVED** rather than assumed.
 ## 4. BKK FUTÁR API (Budapest public transport / Bubi station data)
 
 - **Used by:** Station Ingestion → `stations` (station snapshot)
-- **Licence / terms of use:** **UNRESOLVED.** Not confirmed. Check the terms on https://opendata.bkk.hu.
-- **Attribution:** **UNRESOLVED**
+- **Licence / terms of use:** CC BY 4.0, confirmed by BKK Customer Service on 2026-11-04 (reference 0038/0050538/2026). Data and results from the BKK OpenData API may be used, shared, processed and built into applications and research if the source is acknowledged. Terms: https://opendata.bkk.hu/data-sources.
+- **Attribution:** "Data source: BKK Zrt., CC BY 4.0", with a link to https://creativecommons.org/licenses/by/4.0/. It must be visible on the dashboard.
 - **Access:** Requires registering at https://opendata.bkk.hu and requesting a free API key. The key must **not** be committed to the repo (use an environment variable or a git-ignored config file).
 - **Open questions:**
-  - Key approval: the key was requested on 2026-10-18 and works, but the portal says it may be used only after BKK approval, which has not arrived. BKK was asked by email on 2026-10-26. **UNRESOLVED** (details: `docs/ingestion_notes.md` §1)
-  - Can raw API responses or snapshots be stored and shared in the repo? **UNRESOLVED**
-  - Rate limits? **UNRESOLVED**
-  - Does the API still include MOL Bubi station data? **UNRESOLVED**
+  - Key approval: approved automatically when requested on 2026-10-18; confirmed by BKK on 2026-11-04. **Resolved** (details: `docs/ingestion_notes.md` §1)
+  - Can raw API responses or snapshots be stored and shared? CC BY 4.0 permits sharing with attribution. Keeping raw snapshots out of git is now a team choice (size, reproducibility), not a licence requirement. **Resolved**
+  - Rate limits? None officially published; BKK says one request every 5 seconds or less often is acceptable, and keys used abusively may be disabled. **Resolved**
+  - Does the API still include MOL Bubi station data? Yes: the 2026-10-18 snapshot has 925 station records, and BKK says no other public MOL Bubi source exists. **Resolved**
 
 ## 5. Real GPS route data (`route_type = observed`)
 
@@ -65,4 +65,4 @@ Unconfirmed items are marked **UNRESOLVED** rather than assumed.
 
 ## Required attribution text (draft, for the dashboard / README)
 
-> Map data © OpenStreetMap contributors (ODbL). Population data: WorldPop (CC BY 4.0) and/or GHSL GHS-POP, European Commission JRC (CC BY 4.0). Station data: BKK FUTÁR (terms UNRESOLVED).
+> Map data © OpenStreetMap contributors (ODbL). Population data: WorldPop (CC BY 4.0) and/or GHSL GHS-POP, European Commission JRC (CC BY 4.0). Data source: BKK Zrt., CC BY 4.0.
