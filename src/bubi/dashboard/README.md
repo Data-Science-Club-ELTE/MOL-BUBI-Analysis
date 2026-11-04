@@ -16,6 +16,7 @@
 3. Provide scenario switcher (`baseline`, `lane_aware`, `population_only`).
 4. Display summary metrics (demand, served population, corridor km).
 5. Enable export of GeoJSON and CSV files for decision-makers.
+6. Show the required data attribution below the map (`DATA_ATTRIBUTION` in `app.py`): "Data source: BKK Zrt., CC BY 4.0" for station data and "© OpenStreetMap contributors" (ODbL) for the street network. See `docs/source_inventory.md`.
 
 ---
 

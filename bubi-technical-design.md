@@ -549,7 +549,7 @@ Built-in boundaries of what the results can claim; each is documented in the met
 
 - Ratify the real-data acceptance deadline (proposed: end of week 4) and record what happens if no data arrives.
 - ~~Obtain BKK's approval for the Futár API key.~~ Resolved 2026-11-04: BKK confirmed the key was approved automatically; requests at most every 5 seconds are acceptable (`docs/ingestion_notes.md` §1).
-- ~~Resolve BKK Futár licensing, attribution, and raw-snapshot redistribution terms.~~ Resolved 2026-11-04: CC BY 4.0, attribution "Data source: BKK Zrt., CC BY 4.0" (`docs/source_inventory.md` §4). Remaining work: show the attribution on the dashboard.
+- ~~Resolve BKK Futár licensing, attribution, and raw-snapshot redistribution terms.~~ Resolved 2026-11-04: CC BY 4.0, attribution "Data source: BKK Zrt., CC BY 4.0" (`docs/source_inventory.md` §4). The dashboard shows it below the map.
 - Record the OSM extract date and store or document the frozen graph artifact behind the `budapest_osm_2026w1` label.
 - Confirm the exact DEM product and version behind `copernicus_dem_30m`.
 - Confirm the population product, year, and licence: config names `worldpop_2026_100m`, while the source inventory still lists WorldPop versus GHSL as unresolved.
