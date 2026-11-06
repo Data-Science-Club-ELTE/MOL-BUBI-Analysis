@@ -25,13 +25,28 @@ def _project(lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
     x, y = _TO_EOV.transform(lon, lat)
     return np.column_stack([x, y])
 
+from bubi.contracts.schemas import PopulationSchema, StationsSchema, TripMatrixSchema
+
+EARTH_RADIUS_M = 6_371_000.0
+DEFAULT_BETA_DECAY = 0.0006666667
+
+
+def _haversine_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    lat1_rad, lat2_rad = math.radians(lat1), math.radians(lat2)
+    delta_lat = math.radians(lat2 - lat1)
+    delta_lon = math.radians(lon2 - lon1)
+    haversine = (
+        math.sin(delta_lat / 2) ** 2
+        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2
+    )
+    return 2 * EARTH_RADIUS_M * math.asin(math.sqrt(haversine))
 
 def assign_catchment_population(
     df_stations: pd.DataFrame,
     df_population: pd.DataFrame,
     walk_threshold_m: float = 350.0,
 ) -> pd.DataFrame:
-    """Assign population cells to their nearest station catchment without double-counting.
+    """Assign H3 population cells to their nearest station within the walk threshold.
 
     Each H3 cell goes to exactly one station: the nearest one by centroid distance.
     Cells farther than ``walk_threshold_m`` from every station are unserved and dropped.
@@ -65,7 +80,7 @@ def generate_synthetic_trips(
     df_population: pd.DataFrame,
     scenario: str = "baseline",
     k_scaling: float = 0.05,
-    beta_decay: float = 0.0015,
+    beta_decay: float = DEFAULT_BETA_DECAY,
     random_seed: int = 42,
     walk_threshold_m: float = 350.0,
 ) -> pd.DataFrame:
