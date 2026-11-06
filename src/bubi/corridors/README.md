@@ -32,6 +32,78 @@
 | `edge_scores` | `scenario`, `edge_id`, `volume`, `score`, `rank` | Prioritized directed road edges |
 | `corridors` | `scenario`, `corridor_id`, `edge_ids`, `score`, `rank` | Merged road corridors |
 
+### Edge route volumes (`calculate_edge_route_volumes`)
+
+Intermediate output of step 1, one row per `(scenario, edge_id)` with volume > 0:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `scenario` | str | Scenario of the routes |
+| `edge_id` | str | Directed edge `u-v-key` |
+| `volume` | float | Sum of `trip_count` of routes traversing the edge in that direction |
+
+Rows are sorted by scenario, then volume (highest first), then `edge_id`.
+These are the first three fields of `edge_scores`; `score` and `rank` are added by `detect_gaps_and_score_edges`.
+
+Counting rules:
+
+1. **Direction**: `u-v-key` and `v-u-key` are different edges and are counted separately; edge IDs are never normalised.
+2. **Repeated use**: a route adds its `trip_count` once to each *distinct* edge it uses. A route that passes the same directed edge twice (possible in map-matched GPS traces) still counts once, so volume is the number of trips using the edge in that direction (design doc §7.1).
+3. **Scenarios** are aggregated independently.
+4. **Route types**: `synthetic` and `observed` routes of one scenario are summed; filter `route_type` beforehand if only one is wanted.
+5. Routes with no edges or `trip_count == 0` contribute nothing.
+6. `routes.edges` may be a list, a JSON array string, or a single edge-ID string.
+
+### Per-direction gap detection (`detect_gaps_and_score_edges`)
+
+Step 2 and 3. Takes `edges` and the volumes above, returns `edge_scores` validated by `EdgeScoresSchema`.
+
+```python
+volumes = calculate_edge_route_volumes(df_routes)
+edge_scores = detect_gaps_and_score_edges(gdf_edges, volumes)  # all scenarios
+edge_scores = detect_gaps_and_score_edges(gdf_edges, volumes, scenario="baseline")
+```
+
+Rules:
+
+1. **Direction (D3)**: an edge is dropped only if `has_dedicated_lane` is `True` for that directed edge. A road with a lane in one direction and none in the other keeps only the missing direction.
+2. Only edges with `volume > 0` are scored.
+3. `score = volume × length_m × continuity_factor`. The gap length is the whole edge length; `continuity_factor` stays `1.0` until week 4.
+4. `rank` restarts at 1 in each scenario, highest score first. Ties go to higher volume, then `edge_id`, so ranks are unique and repeatable.
+5. Output is sorted by scenario, then rank.
+6. A volume row whose `edge_id` is missing from `edges` raises `ValueError`: routes and edges must come from the same frozen graph.
+
+### Corridor merging (`merge_edges_into_corridors`)
+
+Steps 4 and 5. Takes `edges` and the edge scores above, returns `corridors` validated by `CorridorsSchema`.
+
+```python
+edge_scores = detect_gaps_and_score_edges(gdf_edges, volumes)
+corridors = merge_edges_into_corridors(gdf_edges, edge_scores)  # all scenarios
+corridors = merge_edges_into_corridors(gdf_edges, edge_scores, scenario="baseline")
+```
+
+Rules:
+
+1. **End to end, one direction**: edge `a` joins edge `b` only when `b` starts at the node where `a` ends (`u-v-key` then `v-w-key`). A corridor therefore always travels one way.
+2. **No U-turns**: an edge is never joined to the same road in the opposite direction (`u-v-key` and `v-u-key`), so the two directions of a street are always separate corridors.
+3. **Clear way on**: not counting the U-turn,
+   - if one gap edge leaves the node, the corridor continues with it;
+   - if several leave (a crossing or fork), it continues with the one on the same `osm_way_id` as the edge it came from, if exactly one is;
+   - the same test runs backwards, so at a join only the edge on the same OSM way may lead in;
+   - otherwise the corridor ends there and each branch starts its own.
+
+   This keeps a corridor on one street through crossings with other gap streets, so a reader can name it.
+4. **Travel order**: `edge_ids` is a list in travel order, so the corridor can be drawn as one line. Every gap edge belongs to exactly one corridor; an edge with no neighbour is a corridor of one edge. A closed loop starts at its smallest edge ID.
+5. **Score**: the sum of the corridor's edge scores, that is the total `volume × gap length × continuity factor` along the corridor. Long, busy gaps rank high.
+6. **Rank**: restarts at 1 in each scenario. Highest score first, then the longer corridor, then the corridor whose first edge ID sorts first, so ranks are unique and do not depend on input order.
+7. **ID**: `corr_<scenario code>_<rank>` with codes `bl`, `la`, `po`, as in the sample fixture (`corr_bl_01`). Output is sorted by scenario, then rank.
+8. Scores that are missing columns, null, negative, duplicated per (`scenario`, `edge_id`), not `u-v-key`, or not in `edges` raise `ValueError`.
+
+Example: main street A → B → C (OSM way 1) crosses side street X → B → Y (way 2), all without lanes. The result is two corridors, `[A-B, B-C]` and `[X-B, B-Y]`. If B → Y were also on way 1, the main street would have two ways on at B, so `A-B` and `B-C` would be separate corridors.
+
+On a synthetic 100,000-edge grid with half of the edges as gaps, merging took 1.5 s.
+
 ---
 
 ## 3. How to Develop Independently

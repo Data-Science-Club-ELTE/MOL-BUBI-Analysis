@@ -1,3 +1,12 @@
-from bubi.routing.router import compute_edge_weight, route_station_pairs
+"""Public routing API exports.
 
-__all__ = ["compute_edge_weight", "route_station_pairs"]
+Only router symbols are exported at package level. Import station snapping and unroutable report
+helpers from their submodules:
+
+- ``from bubi.routing.snapping import snap_stations``
+- ``from bubi.routing.report import unroutable_report``
+"""
+
+from bubi.routing.router import build_graph, compute_edge_weight, route_station_pairs
+
+__all__ = ["build_graph", "compute_edge_weight", "route_station_pairs"]
