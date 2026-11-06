@@ -100,6 +100,13 @@ BASEMAPS = {
     },
 }
 
+# Required by the source licences; see docs/source_inventory.md.
+DATA_ATTRIBUTION = (
+    "Data source: BKK Zrt., "
+    "[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). "
+    "Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL)."
+)
+
 SCENARIO_HELP = {
     "baseline": "Existing Futár stations only.",
     "lane_aware": "Existing + proposed stations scored by population × lane connectivity.",
@@ -981,6 +988,7 @@ def main() -> None:
         f"{len(data.get('edges')):,} directed street edges · map prepared on the server in "
         f"{time.perf_counter() - started:.1f} s (the browser needs extra time to draw it)."
     )
+    st.caption(DATA_ATTRIBUTION)
     for note in fixture_notes(data) + notes:
         st.caption(f"⚠️ {note}")
     render_detail_panel(map_state)

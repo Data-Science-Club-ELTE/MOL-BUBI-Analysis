@@ -404,6 +404,12 @@ def test_app_runs_on_fixtures(monkeypatch, fixtures_dir: Path):
     assert any("is read from test data" in c.value for c in at.caption)
 
 
+def test_app_shows_bkk_and_osm_attribution(monkeypatch, fixtures_dir: Path):
+    at = _run_app(monkeypatch, fixtures_dir)
+    captions = [c.value for c in at.caption]
+    assert any("Data source: BKK Zrt." in c and "OpenStreetMap" in c for c in captions)
+
+
 def test_app_reports_map_preparation_time(monkeypatch, fixtures_dir: Path):
     at = _run_app(monkeypatch, fixtures_dir)
     assert any("directed street edges" in c.value for c in at.caption)
