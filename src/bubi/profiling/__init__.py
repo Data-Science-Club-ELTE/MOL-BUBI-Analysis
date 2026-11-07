@@ -1,3 +1,7 @@
-from bubi.profiling.profiler import generate_traceability_report, profile_dataset
+from bubi.profiling.profiler import (
+    build_quality_report,
+    generate_traceability_report,
+    profile_dataset,
+)
 
-__all__ = ["profile_dataset", "generate_traceability_report"]
+__all__ = ["profile_dataset", "build_quality_report", "generate_traceability_report"]
