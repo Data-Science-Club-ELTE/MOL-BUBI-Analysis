@@ -18,6 +18,8 @@ import numpy as np
 import pandas as pd
 from pyproj import Transformer
 
+from bubi.contracts.schemas import StationsSchema, TripMatrixSchema
+
 _TO_EOV = Transformer.from_crs("EPSG:4326", "EPSG:23700", always_xy=True)
 
 
@@ -25,21 +27,33 @@ def _project(lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
     x, y = _TO_EOV.transform(lon, lat)
     return np.column_stack([x, y])
 
-from bubi.contracts.schemas import PopulationSchema, StationsSchema, TripMatrixSchema
-
-EARTH_RADIUS_M = 6_371_000.0
 DEFAULT_BETA_DECAY = 0.0006666667
 
 
-def _haversine_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    lat1_rad, lat2_rad = math.radians(lat1), math.radians(lat2)
-    delta_lat = math.radians(lat2 - lat1)
-    delta_lon = math.radians(lon2 - lon1)
-    haversine = (
-        math.sin(delta_lat / 2) ** 2
-        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon / 2) ** 2
+def demand_weighted_mean_trip_distance(
+    df_trips: pd.DataFrame, df_stations: pd.DataFrame
+) -> float:
+    """Return the trip-count-weighted mean straight-line distance in metres."""
+    trips = TripMatrixSchema.validate(df_trips)
+    stations = StationsSchema.validate(df_stations)
+    if trips.empty:
+        raise ValueError("cannot compute mean distance for an empty trip matrix")
+
+    station_ids = stations["station_id"].astype(str)
+    indices = {station_id: index for index, station_id in enumerate(station_ids)}
+    origin_indices = trips["start_station_id"].map(indices)
+    destination_indices = trips["end_station_id"].map(indices)
+    if origin_indices.isna().any() or destination_indices.isna().any():
+        raise ValueError("trip matrix references a station not present in df_stations")
+
+    xy = _project(stations["lon"].to_numpy(), stations["lat"].to_numpy())
+    distances = np.linalg.norm(
+        xy[origin_indices.to_numpy(dtype=int)] - xy[destination_indices.to_numpy(dtype=int)],
+        axis=1,
     )
-    return 2 * EARTH_RADIUS_M * math.asin(math.sqrt(haversine))
+    trip_counts = trips["trip_count"].to_numpy(dtype=float)
+    return float(np.average(distances, weights=trip_counts))
+
 
 def assign_catchment_population(
     df_stations: pd.DataFrame,

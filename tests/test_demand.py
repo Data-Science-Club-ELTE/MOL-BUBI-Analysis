@@ -29,7 +29,7 @@ def test_fixture_trip_matrix_has_reportable_mean(sample_stations, sample_populat
         ].sum()
     )
     assert demand_weighted_mean_trip_distance(trips, sample_stations) == pytest.approx(
-        1_160.637, abs=0.01
+        1_161.892, abs=0.01
     )
 
 
