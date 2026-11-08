@@ -17,7 +17,7 @@ design. All numbers on it are placeholders.
 | 4 | Exports | Corridors and stations as GeoJSON and CSV | `corridors` + `edges`, `stations` + `station_candidates` | 1 (CSV), 5 (GeoJSON) |
 | 5 | Key metrics | Station count, newly served population, km of new corridor needed, synthetic trip count | scenario outputs | 1 (counts), 5 (served population, km) |
 | 6 | **Main map area** | Folium map. Lanes drawn per direction: green = lane in that direction, grey = none, orange = priority gap. Tooltip shows rank, direction, volume, lane status | `edges`, `edge_scores`, `corridors` | 1 |
-| 7 | Selected recommendation | Under the map, so the map gets the full width. Score breakdown for the clicked corridor or station (traceability check in section 9): volume, gap length, continuity factor, rank, scenario, robustness label | `edge_scores`, `corridors`, `station_candidates` | 4 |
+| 7 | Selected recommendation | Under the map, so the map gets the full width. Score breakdown for the clicked corridor or station (traceability check in section 9): volume, gap length, continuity factor (1.0–1.25), rank, scenario, robustness label | `edge_scores`, `corridors`, `station_candidates` | 4 |
 | 8 | **Scenario comparison space** | One small map for each of the three scenarios, always visible, demand in absolute terms and per newly served person, newly served people per km of new corridor, robust vs station-dependent corridors (section 7.3) | derived view over `edge_scores` | 1 (maps, counts), 5 (metrics) |
 | 9 | Tables | Tabs for top corridors, station candidates, methodology and limitations (section 13.2) | `corridors`, `station_candidates` | 1 (tables), 6 (methodology) |
 

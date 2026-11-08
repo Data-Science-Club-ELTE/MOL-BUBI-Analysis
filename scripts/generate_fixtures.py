@@ -12,6 +12,11 @@ import pandas as pd
 from shapely.geometry import LineString
 
 from bubi.contracts.io import save_contract_table
+from bubi.corridors import (
+    calculate_edge_route_volumes,
+    detect_gaps_and_score_edges,
+    merge_edges_into_corridors,
+)
 from bubi.demand.gravity import generate_synthetic_trips
 
 
@@ -211,82 +216,18 @@ def generate_all_fixtures(output_dir: Path) -> None:
     df_routes = pd.DataFrame(routes_data)
     save_contract_table(df_routes, "routes", output_dir / "sample_routes.parquet")
 
-    # 6. Edge Scores
-    edge_scores_data = [
-        {"scenario": "baseline", "edge_id": "n1-n3-0", "volume": 210.0, "score": 1512.0, "rank": 1},
-        {"scenario": "baseline", "edge_id": "n1-n5-0", "volume": 180.0, "score": 1710.0, "rank": 2},
-        {"scenario": "baseline", "edge_id": "n2-n1-0", "volume": 115.0, "score": 517.5, "rank": 3},
-        {
-            "scenario": "lane_aware",
-            "edge_id": "n1-n3-0",
-            "volume": 305.0,
-            "score": 2196.0,
-            "rank": 1,
-        },
-        {
-            "scenario": "lane_aware",
-            "edge_id": "n1-n5-0",
-            "volume": 180.0,
-            "score": 1710.0,
-            "rank": 2,
-        },
-        {
-            "scenario": "population_only",
-            "edge_id": "n1-n5-0",
-            "volume": 320.0,
-            "score": 3040.0,
-            "rank": 1,
-        },
-        {
-            "scenario": "population_only",
-            "edge_id": "n1-n3-0",
-            "volume": 210.0,
-            "score": 1512.0,
-            "rank": 2,
-        },
-    ]
-    df_edge_scores = pd.DataFrame(edge_scores_data)
+    # 6. Edge scores and corridors use the same implementation as the pipeline.
+    df_edge_volumes = calculate_edge_route_volumes(df_routes)
+    df_edge_scores = detect_gaps_and_score_edges(gdf_edges, df_edge_volumes)
     save_contract_table(df_edge_scores, "edge_scores", output_dir / "sample_edge_scores.parquet")
 
-    # 7. Corridors
-    corridors_data = [
-        {
-            "scenario": "baseline",
-            "corridor_id": "corr_bl_01",
-            "edge_ids": "n1-n3-0",
-            "score": 1512.0,
-            "rank": 1,
-        },
-        {
-            "scenario": "baseline",
-            "corridor_id": "corr_bl_02",
-            "edge_ids": "n1-n5-0",
-            "score": 1710.0,
-            "rank": 2,
-        },
-        {
-            "scenario": "lane_aware",
-            "corridor_id": "corr_la_01",
-            "edge_ids": "n1-n3-0",
-            "score": 2196.0,
-            "rank": 1,
-        },
-        {
-            "scenario": "population_only",
-            "corridor_id": "corr_po_01",
-            "edge_ids": "n1-n5-0",
-            "score": 3040.0,
-            "rank": 1,
-        },
-    ]
-    df_corridors = pd.DataFrame(corridors_data)
+    # 7. Corridors are derived from the generated edge scores.
+    df_corridors = merge_edges_into_corridors(gdf_edges, df_edge_scores)
     save_contract_table(df_corridors, "corridors", output_dir / "sample_corridors.parquet")
 
     # Trip Matrix handoff interface: produced by the gravity model itself (baseline scenario),
     # so the fixture always matches the documented formula and default parameters.
-    df_trip_matrix = generate_synthetic_trips(
-        df_stations, df_population, scenario="baseline", k_scaling=0.05, beta_decay=0.0015
-    )
+    df_trip_matrix = generate_synthetic_trips(df_stations, df_population, scenario="baseline")
     save_contract_table(df_trip_matrix, "trip_matrix", output_dir / "sample_trip_matrix.parquet")
 
     print(f"All 7 contract tables + trip matrix generated successfully in {output_dir}.")

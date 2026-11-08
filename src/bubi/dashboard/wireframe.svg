@@ -134,7 +134,7 @@
     <text x="500" y="646">Lane in this direction: no</text>
     <text x="500" y="668">Route volume: 1 240</text>
     <text x="500" y="690">Gap length: 720 m</text>
-    <text x="500" y="712">Continuity factor: 1.3</text>
+    <text x="500" y="712">Continuity factor: 1.19</text>
   </g>
   <rect class="box-dark" x="740" y="632" width="234" height="44" rx="4"/>
   <text class="ts" x="750" y="650">Score = volume × gap length</text>

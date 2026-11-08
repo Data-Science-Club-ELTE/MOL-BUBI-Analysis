@@ -172,7 +172,7 @@ The following metrics from the week-1 draft have exact definitions and can be im
 The following metrics from the week-1 draft cannot be computed deterministically yet and are deferred:
 - **M4 (Network walking distance vs straight-line buffer):** Deferred until `src/bubi/network/graph.py` builds the walking graph. Straight-line distance (D15) is used in the interim.
 - **M8 (Gap share of trips):** Requires joining every route's edge sequence against `edges.has_dedicated_lane`. Can be added once the full routing stage is integrated.
-- **M9 (Corridor continuity index):** Depends on the continuity factor in corridor scoring, which is currently set to default 1.0 awaiting the final OSM lane tag rules.
+- **M9 (Corridor continuity index):** The edge-level continuity factor is defined in §15 of `bubi-technical-design.md`; a city-level metric remains deferred until processed OSM edges and routed volumes are available.
 - **M15 & M16 (Parameter sensitivity across grid):** Defined as an exploratory offline analysis (varying $\alpha \pm 50\%$, $\beta \pm 50\%$, walk threshold 300 vs 400 m) for the report methodology appendix rather than an automated pipeline metric. The pass-rate test in `scripts/lane_connectivity_pass_rate.py` provides the initial check.
 
 ---
