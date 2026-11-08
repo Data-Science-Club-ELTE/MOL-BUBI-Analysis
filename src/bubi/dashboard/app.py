@@ -104,7 +104,8 @@ BASEMAPS = {
 DATA_ATTRIBUTION = (
     "Data source: BKK Zrt., "
     "[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). "
-    "Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL)."
+    "Map data © [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) (ODbL). "
+    "Population: WorldPop R2025A v1, constrained, 2026 (ODbL)."
 )
 
 SCENARIO_HELP = {
