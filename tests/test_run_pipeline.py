@@ -8,7 +8,13 @@ import pandas as pd
 import pytest
 import yaml
 
-from bubi.contracts.schemas import TripMatrixSchema
+from bubi.contracts.io import load_contract_table
+from bubi.contracts.schemas import CorridorsSchema, EdgeScoresSchema, TripMatrixSchema
+from bubi.corridors import (
+    calculate_edge_route_volumes,
+    detect_gaps_and_score_edges,
+    merge_edges_into_corridors,
+)
 
 ROOT = Path(__file__).parents[1]
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -121,8 +127,6 @@ def test_blocked_stages_name_their_owning_issue(tmp_path, config):
         "edges": "#15",
         "candidates": "#39",
         "routes": "#36",
-        "scores": "#21",
-        "corridors": "#37",
     }
     for stage, issue in owners.items():
         assert results[stage].status == rp.BLOCKED
@@ -130,6 +134,9 @@ def test_blocked_stages_name_their_owning_issue(tmp_path, config):
     assert results["trips"].status == rp.BLOCKED
     assert results["trips"].detail == "upstream: population (#23)"
     assert results["volumes"].detail == "upstream: routes (#36)"
+    # Scores and corridors are implemented (#21, #37) and wait only on their inputs.
+    assert results["scores"].detail == "upstream: edges (#15), volumes (via routes (#36))"
+    assert results["corridors"].detail.startswith("upstream: edges (#15), scores (via ")
     assert not any(r.status == rp.FAILED for r in results.values())
 
 
@@ -150,6 +157,33 @@ def test_implemented_stages_run_and_validate_on_existing_inputs(tmp_path, config
     volumes = pd.read_parquet(processed / "edge_volumes.parquet")
     assert list(volumes.columns) == ["scenario", "edge_id", "volume"]
     assert results["scores"].status == rp.BLOCKED  # edges are still missing
+
+    # A second run finds every table identical and rewrites nothing.
+    rerun = _by_stage(rp.run_pipeline(tmp_path, config))
+    assert not any(result.changed for result in rerun.values())
+
+
+def test_scores_and_corridors_run_once_edges_and_routes_exist(tmp_path, config):
+    _with_raw_snapshot(tmp_path)
+    _place(tmp_path, "sample_population.parquet", "population")
+    _place(tmp_path, "sample_edges.parquet", "edges")
+    _place(tmp_path, "sample_routes.parquet", "routes")
+
+    results = _by_stage(rp.run_pipeline(tmp_path, config))
+
+    for stage in ("volumes", "scores", "corridors"):
+        assert results[stage].status == rp.DONE and results[stage].changed
+    processed = tmp_path / "data" / "processed"
+    edges = load_contract_table("edges", FIXTURES / "sample_edges.parquet")
+    routes = load_contract_table("routes", FIXTURES / "sample_routes.parquet")
+    expected_scores = detect_gaps_and_score_edges(edges, calculate_edge_route_volumes(routes))
+    scores = EdgeScoresSchema.validate(pd.read_parquet(processed / "edge_scores.parquet"))
+    pd.testing.assert_frame_equal(scores, expected_scores)
+    corridors = CorridorsSchema.validate(pd.read_parquet(processed / "corridors.parquet"))
+    expected_corridors = merge_edges_into_corridors(edges, expected_scores)
+    assert corridors["corridor_id"].tolist() == expected_corridors["corridor_id"].tolist()
+    assert [list(ids) for ids in corridors["edge_ids"]] == expected_corridors["edge_ids"].tolist()
+    assert corridors["score"].tolist() == expected_corridors["score"].tolist()
 
     # A second run finds every table identical and rewrites nothing.
     rerun = _by_stage(rp.run_pipeline(tmp_path, config))

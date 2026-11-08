@@ -5,9 +5,9 @@ Unconfirmed items are marked **UNRESOLVED** rather than assumed.
 | Source | Used for | Licence | Attribution required | Access | Status |
 |---|---|---|---|---|---|
 | OpenStreetMap (via OSMnx) | `edges` | ODbL 1.0 | Yes | Free, no key | Confirmed |
-| WorldPop | `population` | CC BY 4.0 | Yes | Free, no key | Confirmed |
-| GHSL GHS-POP (EC JRC) | `population` | CC BY 4.0 | Yes | Free, no key | Confirmed |
-| BKK FUTÁR API | `stations` | **UNRESOLVED** | **UNRESOLVED** | Free API key required | Partly unresolved |
+| WorldPop (R2025A v1, constrained, epoch 2026) | `population` | ODbL 1.0 | Yes | Free, no key | **Chosen** — `docs/population_source.md` |
+| GHSL GHS-POP (EC JRC, R2023A, epoch 2025) | `population` (alternative) | CC BY 4.0 | Yes | Free, no key | Evaluated, not used — `docs/population_source.md` |
+| BKK FUTÁR API | `stations` | CC BY 4.0 | Yes | Free API key required (approved) | Confirmed by BKK, 2026-11-04 |
 
 ---
 
@@ -24,36 +24,43 @@ Unconfirmed items are marked **UNRESOLVED** rather than assumed.
 
 ## 2. WorldPop
 
+Chosen source for `population`; the comparison and decision are in `docs/population_source.md`.
+
+- **Dataset:** Individual countries 2015–2030 (100 m), **R2025A v1**, Hungary, **constrained**, epoch **2026** (`hun_pop_2026_CN_100m_R2025A_v1`). Units are people per cell, not density. Grid is 3 arc-second EPSG:4326, about 5,777 m² per cell at Budapest's latitude.
 - **Used by:** Population → `population`
-- **Licence:** CC BY 4.0 (free to use and adapt, including commercially, with attribution)
-- **Attribution:** Cite WorldPop (www.worldpop.org) and the specific dataset used, with a link to the licence.
-- **Access:** Free download, no registration.
-- **Restrictions:** WorldPop datasets derived from OpenStreetMap or Microsoft building/road data are under ODbL instead. Check which dataset we use.
+- **Licence:** **ODbL 1.0**, not CC BY 4.0. WorldPop releases most data under CC BY 4.0 but states that datasets derived from OpenStreetMap, Microsoft Building Footprints or Microsoft Roads Detection are ODbL. Its R2025A release statement lists Microsoft Building Footprints among the inputs of the built-settlement model that constrains this product, so the exception applies.
+- **Restrictions:** Share-alike. A published Derivative Database — including the `population` table, any committed sample of it, and any database combining it with the OSM-derived `edges` — must be offered under ODbL with attribution. Code is unaffected.
+- **Attribution:** see the required string at the end of this file.
+- **Access:** Free download, no registration: https://data.worldpop.org/GIS/Population/Global_2015_2030/R2025A/2026/HUN/v1/100m/constrained/hun_pop_2026_CN_100m_R2025A_v1.tif (16.6 MiB). DOI 10.5258/SOTON/WP00839, produced 2025-09-01.
+- **Checksum:** `e13123be2f47f7d56337e41b7a1c80f7f26270c4a06d05b0789134e9a982f5fd` (country file, 17,380,869 bytes). Every population figure in `docs/population_source.md` was computed from this file. R2025A is an **alpha** release that WorldPop says may change, so re-check the checksum on any re-download.
 - **Open questions:**
-  - Which product, year and resolution (e.g. 100 m, constrained or unconstrained)? **UNRESOLVED**
-  - Are we using WorldPop, GHSL, or both? **UNRESOLVED**
+  - WorldPop publishes one licence rule, not a per-country table; the ODbL reading above follows from that rule plus the release statement. Ask WorldPop to confirm in writing if the status becomes material to BKK or to a publication. **UNRESOLVED**
+  - R2025A may be superseded by a final release; re-run the comparison if the checksum changes. **UNRESOLVED**
 
 ## 3. GHSL (Global Human Settlement Layer), EC Joint Research Centre
 
-- **Used by:** Population → `population` (alternative or complement to WorldPop)
-- **Licence:** CC BY 4.0
-- **Attribution:** Cite the dataset, e.g. "GHS-POP R2023A – GHS population grid multitemporal (1975–2030). European Commission, Joint Research Centre (JRC)."
+Evaluated against WorldPop and not adopted; the numbers are in `docs/population_source.md`. It stays the documented fallback if a deliverable must remain CC BY-only.
+
+- **Dataset evaluated:** GHS-POP **R2023A**, epoch **2025**, 3 arc-second product `GHS_POP_E2025_GLOBE_R2023A_4326_3ss_V1_0` (tile R5_C20). Units are people per cell.
+- **Used by:** Population → `population` (alternative only)
+- **Licence:** **CC BY 4.0** — no share-alike clause. The GHSL FAQ states that the data are provided under the Creative Commons Attribution 4.0 International (CC BY 4.0) licence, and the built-up layers behind it come from satellite imagery rather than OSM.
+- **Attribution:** "GHS-POP R2023A – GHS population grid multitemporal (1975–2030). European Commission, Joint Research Centre (JRC). © European Union, 1995–2025." Add the peer-reviewed GHSL release publication, which the FAQ requires for "appropriate credit".
 - **Access:** Free download from the JRC GHSL site, no registration.
-- **Restrictions:** Default grid is World Mollweide (ESRI:54009); a WGS84 version also exists. The CRS must be converted before H3 aggregation.
+- **Restrictions:** The native grid is World Mollweide (ESRI:54009); the 3 arc-second distribution is a resampling of it. Tile R5_C20 stops at 19.99°E, so it covers only about 60% of Hungary — fine for Budapest, insufficient for a national GHSL total.
 - **Open questions:**
-  - Which release, epoch (year) and resolution? **UNRESOLVED**
+  - A full-country GHSL comparison needs tile R5_C21. **UNRESOLVED** (not needed for the decision)
 
 ## 4. BKK FUTÁR API (Budapest public transport / Bubi station data)
 
 - **Used by:** Station Ingestion → `stations` (station snapshot)
-- **Licence / terms of use:** **UNRESOLVED.** Not confirmed. Check the terms on https://opendata.bkk.hu.
-- **Attribution:** **UNRESOLVED**
+- **Licence / terms of use:** CC BY 4.0, confirmed by BKK Customer Service on 2026-11-04 (reference 0038/0050538/2026). Data and results from the BKK OpenData API may be used, shared, processed and built into applications and research if the source is acknowledged. Terms: https://opendata.bkk.hu/data-sources.
+- **Attribution:** "Data source: BKK Zrt., CC BY 4.0", with a link to https://creativecommons.org/licenses/by/4.0/. It must be visible on the dashboard.
 - **Access:** Requires registering at https://opendata.bkk.hu and requesting a free API key. The key must **not** be committed to the repo (use an environment variable or a git-ignored config file).
 - **Open questions:**
-  - Key approval: the key was requested on 2026-10-18 and works, but the portal says it may be used only after BKK approval, which has not arrived. BKK was asked by email on 2026-10-26. **UNRESOLVED** (details: `docs/ingestion_notes.md` §1)
-  - Can raw API responses or snapshots be stored and shared in the repo? **UNRESOLVED**
-  - Rate limits? **UNRESOLVED**
-  - Does the API still include MOL Bubi station data? **UNRESOLVED**
+  - Key approval: approved automatically when requested on 2026-10-18; confirmed by BKK on 2026-11-04. **Resolved** (details: `docs/ingestion_notes.md` §1)
+  - Can raw API responses or snapshots be stored and shared? CC BY 4.0 permits sharing with attribution. Keeping raw snapshots out of git is now a team choice (size, reproducibility), not a licence requirement. **Resolved**
+  - Rate limits? None officially published; BKK says one request every 5 seconds or less often is acceptable, and keys used abusively may be disabled. **Resolved**
+  - Does the API still include MOL Bubi station data? Yes: the 2026-10-18 snapshot has 925 station records, and BKK says no other public MOL Bubi source exists. **Resolved**
 
 ## 5. Real GPS route data (`route_type = observed`)
 
@@ -63,6 +70,10 @@ Unconfirmed items are marked **UNRESOLVED** rather than assumed.
 
 ---
 
-## Required attribution text (draft, for the dashboard / README)
+## Required attribution text (for the dashboard, README and exported tables)
 
-> Map data © OpenStreetMap contributors (ODbL). Population data: WorldPop (CC BY 4.0) and/or GHSL GHS-POP, European Commission JRC (CC BY 4.0). Station data: BKK FUTÁR (terms UNRESOLVED).
+> Map data © OpenStreetMap contributors (ODbL). Population: WorldPop R2025A v1, constrained, 2026 (ODbL 1.0). Data source: BKK Zrt., CC BY 4.0.
+
+The full WorldPop citation that must travel with the `population` table:
+
+> Bondarenko M., Priyatikanto R., Tejedor-Garavito N., Zhang W., McKeen T., Cunningham A., Woods T., Hilton J., Cihan D., Nosatiuk B., Brinkhoff T., Tatem A., Sorichetta A. (2025). Constrained estimates of 2015–2030 total number of people per grid square at a resolution of 3 arc (approximately 100m at the equator), R2025A v1. WorldPop, University of Southampton. DOI: 10.5258/SOTON/WP00839. Licence: ODbL 1.0.

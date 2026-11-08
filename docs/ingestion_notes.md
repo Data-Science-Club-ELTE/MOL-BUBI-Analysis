@@ -3,11 +3,16 @@
 ## 1. API access and key status
 - Portal: BKK OpenData Portal (opendata.bkk.hu), section "Key management".
 - Own key requested on 2026-10-18 at 18:28 (portal time) as a non-commercial student project (Data Science Club ELTE).
-- The portal says a requested key can be used only after BKK approves it. No approval has been received so far.
+- The portal says a requested key can be used only after BKK approves it. BKK has since confirmed the key was approved automatically (see below).
 - The key worked about 6 minutes after the request (first snapshot at 18:34 local time, 16:34 UTC).
 - Key check on the same endpoint (2026-10-18): no key -> HTTP 401, wrong key -> HTTP 401, own key -> HTTP 200. So the endpoint does validate the key.
-- On 2026-10-26 the key owner emailed BKK to ask when the approval will arrive. No reply yet.
-- Access status: technically the key works, but formal approval is pending. Until BKK replies, no new API requests are made; the two existing snapshots are enough, and the station table and tests use the saved raw file only.
+- On 2026-10-26 the key owner emailed BKK to ask when the approval will arrive.
+- BKK Customer Service replied on 2026-11-04 (reference number 0038/0050538/2026):
+  - The key request was approved automatically by the system; nothing further is needed and the key can be used.
+  - There are no officially published rate limits. BKK may disable keys used abusively or for unintended purposes. For this project, one request every 5 seconds or less often is acceptable.
+  - Data and results from the BKK OpenData API may be used freely if the source is acknowledged. The datasets are under CC BY 4.0 (use, share, process, and build into applications and research), with the attribution text "Data source: BKK Zrt., CC BY 4.0". Terms: https://opendata.bkk.hu/data-sources; licence: https://creativecommons.org/licenses/by/4.0/.
+  - There is no other publicly available data source for MOL Bubi; the FUTÁR API remains the best option.
+- Access status: the key is approved. New requests are allowed, at most one every 5 seconds. The station table and tests still use the saved raw file, so a fresh snapshot is only needed when the frozen snapshot is deliberately replaced.
 
 ## 2. Request
 - Endpoint: `https://futar.bkk.hu/api/query/v1/ws/otp/api/where/bicycle-rental.json`
@@ -70,7 +75,7 @@ A second request about 4.5 hours later (21:08 UTC, 962 records) was compared wit
 | Frozen Futár snapshot | `data/raw/futar_bicycle_rental_20261018T163442Z.json` | No (`data/raw/` is ignored) | Drive `MOL-BUBI_DSC/raw_futar_bicycle_rental` | `stations` |
 | Second Futár snapshot and both `.meta.json` files | `data/raw/` | No | Same Drive folder | None; kept as evidence (§6) |
 | Processed stations table | `data/processed/stations.parquet` | Yes | The repository | Input to `candidates` and `trips` |
-| Population raster | Not decided | No | Not decided | `population` (#23); product is an open question in `docs/source_inventory.md` §2–3 |
+| Population raster | `data/raw/worldpop2026_density.tif` (window of `hun_pop_2026_CN_100m_R2025A_v1.tif`) | No (`data/raw/` is ignored) | Not yet copied anywhere | `population` (#23); WorldPop 2026 constrained decided, checksum in `docs/source_inventory.md` §2 and `docs/population_source.md` |
 | OSM street and walking graphs | Not decided | No | Not decided | `edges` (#15); snapshot date is an open question in `docs/source_inventory.md` §1 |
 | Real trips and GPS points | None received | No | None | Not wired into the pipeline yet; see `src/bubi/ingestion/README.md` §8 |
 
@@ -92,7 +97,7 @@ sha256sum data/raw/futar_bicycle_rental_20261018T163442Z.json
 |---|---|---|
 | `BKK_FUTAR_API_KEY` | Fetching a **new** Futár snapshot (`python -m bubi.ingestion.futar_snapshot`, or `ingest_futar_stations` without `raw_path`) | Shell environment or the git-ignored `.env`; template in `.env.example` |
 
-The pipeline and the reproducibility check need no environment variables. They read the saved snapshot only and make no API requests, which follows the pending-approval rule in §1.
+The pipeline and the reproducibility check need no environment variables. They read the saved snapshot only and make no API requests, so runs are reproducible against the frozen snapshot.
 
 ### 10.4 Running the pipeline
 
@@ -127,6 +132,15 @@ corridors   BLOCKED   data/processed/corridors.parquet  module not implemented y
 ```
 
 The `trips` and `volumes` stages run once their inputs exist. `tests/test_run_pipeline.py` runs them on the sample population and routes fixtures.
+
+Since #21 and #37 the `scores` stage runs `detect_gaps_and_score_edges` (continuity factor 1.0 until it is defined) and the `corridors` stage runs `merge_edges_into_corridors`. Both are no longer blocked by their own issue; they wait only on their inputs. With the same inputs as above, their lines now read:
+
+```text
+scores      BLOCKED   data/processed/edge_scores.parquet  upstream: edges (#15), volumes (via routes (#36))
+corridors   BLOCKED   data/processed/corridors.parquet  upstream: edges (#15), scores (via edges (#15), volumes (via routes (#36)))
+```
+
+`tests/test_run_pipeline.py` runs both on the sample edges and routes fixtures and checks that a second run rewrites nothing. List cells, such as `corridors.edge_ids`, come back from Parquet as NumPy arrays, so the "unchanged" check compares them as tuples.
 
 ### 10.5 Reproducibility check
 
