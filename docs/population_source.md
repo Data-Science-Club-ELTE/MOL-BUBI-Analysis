@@ -54,11 +54,12 @@ import h3, numpy as np, rasterio as rio, shapely
 from pyproj import Transformer
 from shapely.geometry import Polygon
 
+
 def aggregate(raster_path, geometry, resolution=9):
     """Population per H3 cell, weighted by the share of each raster cell inside it."""
     src = rio.open(raster_path)
     a = src.read(1).astype("float64")
-    if src.nodata is not None:                     # constrained product: nodata = no settlement
+    if src.nodata is not None:  # constrained product: nodata = no settlement
         a = np.where(a == src.nodata, 0.0, a)
     tr = src.transform
     to_src = Transformer.from_crs("EPSG:4326", src.crs, always_xy=True)
@@ -68,17 +69,20 @@ def aggregate(raster_path, geometry, resolution=9):
         gx, gy = to_src.transform(*np.array(ring).T)
         poly = Polygon(np.column_stack([gx, gy]))
         minx, miny, maxx, maxy = poly.bounds
-        i0 = max(0, int((minx - tr.c) // tr.a)); i1 = min(src.width - 1, int((maxx - tr.c) // tr.a))
-        j0 = max(0, int((maxy - tr.f) // tr.e)); j1 = min(src.height - 1, int((miny - tr.f) // tr.e))
+        i0 = max(0, int((minx - tr.c) // tr.a))
+        i1 = min(src.width - 1, int((maxx - tr.c) // tr.a))
+        j0 = max(0, int((maxy - tr.f) // tr.e))
+        j1 = min(src.height - 1, int((miny - tr.f) // tr.e))
         xs = tr.c + np.arange(i0, i1 + 1) * tr.a
         ys = tr.f + np.arange(j0, j1 + 1) * tr.e
         boxes = shapely.box(xs[None, :], ys[:, None], xs[None, :] + tr.a, ys[:, None] + tr.e)
         w = np.clip(shapely.area(shapely.intersection(poly, boxes)) / abs(tr.a * tr.e), 0, 1)
-        out[cell] = float((a[j0:j1 + 1, i0:i1 + 1] * w).sum())
+        out[cell] = float((a[j0 : j1 + 1, i0 : i1 + 1] * w).sum())
     return out
 
+
 # Nominatim: /search?q=Budapest&format=json&polygon_geojson=1&limit=1
-boundary = json.load(open("budapest.geojson"))[0]["geojson"]   # Nominatim output
+boundary = json.load(open("budapest.geojson"))[0]["geojson"]  # Nominatim output
 print(sum(aggregate("data/raw/worldpop2026_density.tif", boundary).values()))
 ```
 
