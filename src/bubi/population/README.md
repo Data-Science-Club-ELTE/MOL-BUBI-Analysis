@@ -47,5 +47,5 @@ You can develop the raster-to-H3 conversion on any sample GeoTIFF or synthetic r
 ---
 
 ## 4. Key Open Decisions (Week 1–2)
-- **Source selection**: Choose WorldPop (constrained/unconstrained 2020/2026) vs. GHSL.
-- Check data licensing and attribution terms for report appendix.
+- ~~**Source selection**: Choose WorldPop (constrained/unconstrained 2020/2026) vs. GHSL.~~ Decided 2026-11-08: WorldPop R2025A v1, constrained, epoch 2026, under ODbL 1.0. GHSL R2023A is the documented alternative. Comparison and figures: `docs/population_source.md`.
+- ~~Check data licensing and attribution terms for report appendix.~~ Decided: ODbL 1.0 with share-alike, attribution string in `docs/source_inventory.md` §2 and at the end of that file.

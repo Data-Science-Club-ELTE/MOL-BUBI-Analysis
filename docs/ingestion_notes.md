@@ -75,7 +75,7 @@ A second request about 4.5 hours later (21:08 UTC, 962 records) was compared wit
 | Frozen Futár snapshot | `data/raw/futar_bicycle_rental_20261018T163442Z.json` | No (`data/raw/` is ignored) | Drive `MOL-BUBI_DSC/raw_futar_bicycle_rental` | `stations` |
 | Second Futár snapshot and both `.meta.json` files | `data/raw/` | No | Same Drive folder | None; kept as evidence (§6) |
 | Processed stations table | `data/processed/stations.parquet` | Yes | The repository | Input to `candidates` and `trips` |
-| Population raster | Not decided | No | Not decided | `population` (#23); product is an open question in `docs/source_inventory.md` §2–3 |
+| Population raster | `data/raw/worldpop2026_density.tif` (window of `hun_pop_2026_CN_100m_R2025A_v1.tif`) | No (`data/raw/` is ignored) | Not yet copied anywhere | `population` (#23); WorldPop 2026 constrained decided, checksum in `docs/source_inventory.md` §2 and `docs/population_source.md` |
 | OSM street and walking graphs | Not decided | No | Not decided | `edges` (#15); snapshot date is an open question in `docs/source_inventory.md` §1 |
 | Real trips and GPS points | None received | No | None | Not wired into the pipeline yet; see `src/bubi/ingestion/README.md` §8 |
 
