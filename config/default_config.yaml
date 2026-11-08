@@ -15,7 +15,7 @@ network:
   frozen_graph_version: "budapest_osm_2026w1"
   network_type: "bike"
   walking_network_type: "walk"
-  elevation_dem_source: "copernicus_dem_30m"
+  elevation_dem_source: "copernicus_glo30_2021"  # docs/decisions/dem_source.md
   uphill_penalty_alpha: 3.0
 
 demand:
