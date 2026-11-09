@@ -109,7 +109,6 @@ def _run_volumes(inputs: list[Path], config: dict) -> pd.DataFrame:
 
 def _run_scores(inputs: list[Path], config: dict) -> pd.DataFrame:
     edges_path, volumes_path = inputs
-    # The continuity factor keeps its default of 1.0 until it is defined (design doc 7.1).
     return detect_gaps_and_score_edges(
         load_contract_table("edges", edges_path),
         load_contract_table("edge_scores", volumes_path, validate=False),

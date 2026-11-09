@@ -8,7 +8,7 @@ This is a living design and implementation record. Behaviour described as **impl
 
 **Audience:** project teammates and reviewers from BKK (Centre for Budapest Transport, the city's public transport authority). Readers are assumed to be Python-literate but not necessarily OpenStreetMap (OSM) or network-analysis specialists. Domain terms and acronyms are defined on first use.
 
-**Reading guide:** §1–§2 cover scope and decisions; §3 gives the current implementation status; §4–§5 specify the stack and frozen data contract; §6–§7 describe modules and scoring; §8–§9 cover the real-data path and validation; §10–§12 cover ownership, schedule, and workflow; §13–§14 list risks and open items.
+**Reading guide:** §1–§2 cover scope and decisions; §3 gives the current implementation status; §4–§5 specify the stack and frozen data contract; §6–§7 describe modules and scoring; §8–§9 cover the real-data path and validation; §10–§12 cover ownership, schedule, and workflow; §13–§14 list risks and open items; §15 is the scoring methodology appendix.
 
 ## Contents
 
@@ -26,6 +26,7 @@ This is a living design and implementation record. Behaviour described as **impl
 12. [Development workflow](#12-development-workflow)
 13. [Risks and limitations](#13-risks-and-limitations)
 14. [Open items](#14-open-items)
+15. [Methodology appendix](#15-methodology-appendix)
 
 ---
 
@@ -67,7 +68,7 @@ Decisions recorded since the first draft, now fixed by code and configuration:
 | --- | --- |
 | D12 | The data contract is **frozen in code** as Pandera schemas in `src/bubi/contracts/schemas.py` and explained in `docs/data_dictionary.md`. Changing it is a recorded design decision, not an ad-hoc edit. |
 | D13 | Stations come from the **`bicycle-rental`** snapshot of BKK Futár (BKK's real-time data API). Only fixed docking stations are kept: records with `type == "virtual"`, which is also exactly the set whose style icon is not `vehicle-rental/mol-bubi-floating`. Free-floating bikes are vehicles, not stations, and are excluded. The 18 October 2026 snapshot yields **704** fixed stations. |
-| D14 | Tunable parameters live in `config/default_config.yaml`. Defaults at this revision: random seed 42; EPSG:4326 for exchange and EPSG:23700 (Hungarian national grid) for measurement; H3 (a hexagonal spatial index) resolution 9; uphill penalty α = 3.0; walking-coverage threshold 350 m; gravity scaling k = 0.05 and decay β = 0.0015 m⁻¹; candidate population floor 100; N = 10 proposed stations; minimum spacing 400 m; lane reach R = 400 m. |
+| D14 | Tunable parameters live in `config/default_config.yaml`. Defaults at this revision: random seed 42; EPSG:4326 for exchange and EPSG:23700 (Hungarian national grid) for measurement; H3 (a hexagonal spatial index) resolution 9; uphill penalty α = 3.0; walking-coverage threshold 350 m; gravity scaling k = 0.05 and decay β = 0.0006666667 m⁻¹; candidate population floor 100; N = 10 proposed stations; minimum spacing 400 m; lane reach R = 400 m. |
 | D15 | While the walking-network and routing layers do not exist, distance filters use **straight-line distance** in EPSG:23700. This is a documented lower bound on walking or network distance, not a substitute, and it is labelled wherever it affects a recommendation. |
 | D16 | The gravity model emits **deterministic expected trip counts**; no sampling is performed, so the random seed is currently unused. Exponential distance decay is implemented; the power-law alternative listed in config is not. |
 | D17 | The pipeline is a Python package under `src/bubi/`, installed with `uv`, validated with Pandera, tested with pytest, and linted/formatted with ruff. CI runs on GitHub Actions. |
@@ -118,7 +119,7 @@ flowchart LR
 | Station filtering, connectivity, selection | `stations/selector.py` | Implemented |
 | Lane-connectivity pass-rate test | `stations/diagnostics.py`, `scripts/lane_connectivity_pass_rate.py` | Implemented; run on mock fixtures only |
 | Edge route volumes | `corridors/scoring.py` → `calculate_edge_route_volumes` | Implemented |
-| Gap scoring and corridor merging | `corridors/scoring.py` → `detect_gaps_and_score_edges`, `merge_edges_into_corridors` | Planned; both raise `NotImplementedError` |
+| Gap scoring and corridor merging | `corridors/scoring.py` → `detect_gaps_and_score_edges`, `merge_edges_into_corridors` | Implemented; continuity factors are defined in §15 |
 | OSM network and lane model | `network/graph.py` | Planned; raises `NotImplementedError` |
 | Population raster to H3 | `population/grid.py` | Planned; raises `NotImplementedError` |
 | Slope-aware routing | `routing/router.py` | Partial: edge cost implemented, path search planned |
@@ -126,7 +127,7 @@ flowchart LR
 | Dashboard | `dashboard/app.py` | Prototype: runs on fixtures or processed tables, CSV exports only, placeholder positions for proposed stations |
 | Profiling and traceability | `profiling/profiler.py` | Partial: summary profiling implemented, traceability report planned |
 
-At this revision the end-to-end pipeline **cannot** run: network, population, routing, gap scoring, and scenario orchestration are missing. The dashboard is the only component that runs interactively, and it falls back to mock fixtures when processed tables are absent. Statuses follow from reading each module; §9.3 lists the checks that were run.
+At this revision the end-to-end pipeline **cannot** run: network, population, routing, and scenario orchestration are missing. Gap scoring and corridor merging run when their edge and volume inputs are available. The dashboard is the only component that runs interactively, and it falls back to mock fixtures when processed tables are absent. Statuses follow from reading each module; §9.3 lists the checks that were run.
 
 ---
 
@@ -273,11 +274,11 @@ Flat and downhill edges receive no penalty; uphill edges do. The path search its
 
 A DEM source is named in config, but the graph, grade attributes, bridge/tunnel interpolation, cache, and report are all unimplemented.
 
-### 6.5 Bike-lane gap detection and corridor ranking (partial)
+### 6.5 Bike-lane gap detection and corridor ranking (implemented)
 
 Implemented: `calculate_edge_route_volumes` counts trip volume per directed edge. It validates required columns and numeric, non-negative `trip_count`; accepts `edges` as a list, tuple, NumPy array, JSON array string, or single edge-ID string; rejects malformed edge IDs; counts each route once per distinct directed edge even if the route traverses it twice; aggregates scenarios independently; sums synthetic and observed routes; ignores routes with no edges or zero trips; and returns one row per (`scenario`, `edge_id`) with `volume > 0`, sorted by scenario, volume descending, then `edge_id`.
 
-Planned: filter directed edges with no dedicated lane in that direction, score them (§7.1), merge adjacent high-scoring edges of the same direction into readable corridors, and rank corridors. `detect_gaps_and_score_edges` and `merge_edges_into_corridors` currently raise `NotImplementedError`. There is no fallback: `edge_scores` and `corridors` cannot be produced yet, and the dashboard's corridor layers therefore rely on mock fixtures.
+Implemented: filter directed edges with no dedicated lane in that direction, score them (§7.1 and §15), merge adjacent high-scoring edges of the same direction into readable corridors, and rank corridors. `edge_scores` and `corridors` can be produced when edge and volume inputs exist; the dashboard still uses mock fixtures because processed OSM edges and routed volumes are not available.
 
 ### 6.6 Station scoring (implemented)
 
@@ -313,15 +314,17 @@ The Makefile target `make dashboard` starts the app. It was not exercised while 
 
 ## 7. Scoring methods
 
-### 7.1 Bike-lane candidate score (planned)
+### 7.1 Bike-lane candidate score (implemented)
 
 For each directed road edge without a dedicated lane in that direction:
 
-`score = route volume × missing-lane gap length × continuity factor`
+`base score = route volume × missing-lane gap length`
+
+`score = base score × continuity factor`
 
 - **Route volume:** total `trip_count` of trips traversing the edge in that direction, produced by the implemented volume step. This is a trip count, not a count of distinct routes. Because routing favors downhill, volume is direction-asymmetric, so the dashboard shows direction explicitly. Counting rules are listed in §6.5.
 - **Gap length:** length of the edge lacking a lane, from `length_m`.
-- **Continuity factor:** rewards edges that connect to other high-scoring gap edges. Its exact definition is still to be agreed and documented in the appendix; the stub accepts a value of 1.0 but performs no scoring yet.
+- **Continuity factor:** a dimensionless, bounded multiplier calculated from the normalized base scores of directly connected gap edges in the same scenario. It is `1.0` for an isolated gap and at most `1.25`; §15 defines adjacency, normalization, and edge cases.
 
 ### 7.2 Station candidate score (implemented)
 
@@ -416,7 +419,7 @@ uv run pytest tests/ -v
 
 It installs Python 3.12 with `astral-sh/setup-uv` and installs the project in editable mode. Note that CI regenerates fixtures but does not fail on a diff against the committed fixture files; regeneration is a smoke test, not a byte-for-byte check.
 
-Test coverage today: contract validation, gravity-model properties, edge-volume counting rules, station filtering/connectivity/selection, Futár snapshot inspection and writing, and processed-station selection. Missing coverage: OSM network build, population raster aggregation, route search, gap scoring and corridor merging, scenario orchestration, dashboard behaviour, and traceability reporting.
+Test coverage today: contract validation, gravity-model properties, edge-volume counting rules, continuity and corridor scoring, station filtering/connectivity/selection, Futár snapshot inspection and writing, and processed-station selection. Missing coverage: OSM network build, population raster aggregation, route search, scenario orchestration, dashboard behaviour, and traceability reporting.
 
 ---
 
@@ -563,7 +566,7 @@ Built-in boundaries of what the results can claim; each is documented in the met
 
 ### 14.3 Scoring and scenarios
 
-- Define the continuity factor for the bike-lane score and the corridor-merging rules, then implement gap scoring and corridor ranking.
+- Validate the continuity-factor weighting and corridor-merging rules on real OSM edges when the processed network is available.
 - Run the lane-connectivity pass-rate test on real `edges` and `population` tables and record the decision it supports.
 - Set or confirm N, minimum spacing, and the walking threshold after sensitivity checks; H3 resolution 9 has not been tested.
 - Implement or remove power-law decay; decide whether the random seed becomes meaningful if sampling is added.
@@ -579,3 +582,35 @@ Built-in boundaries of what the results can claim; each is documented in the met
 - Declare `pyproj` as a direct dependency and add a raster-reading dependency for the population module.
 - Finish the dashboard's promised layers and exports: true proposed-station coordinates, route and population layers, scenario differences, and GeoJSON export.
 - Implement the traceability report generator so displayed recommendations link to their input counts and scoring logic.
+
+## 15. Methodology appendix
+
+### 15.1 Bike-lane score continuity factor
+
+For each used, directed edge without a dedicated lane, let the base score be
+
+`B_i = V_i × L_i`
+
+where `V_i` is route volume in trips and `L_i` is the missing-lane edge length in metres. The base score therefore has units of trip-metres. Normalize base scores within each scenario to percentiles `P_i`:
+
+- Zero base scores map to `0`.
+- Positive scores use average ranks for ties, normalized to `[0, 1]` as `(average_rank - 1) / (n_positive - 1)` when there is more than one positive score.
+- A sole positive score among multiple edges maps to `1`; a one-edge scenario maps to `0`. If all scores are zero, all percentiles are `0`.
+
+`N_i` is the set of other gap edges in the same scenario that can immediately precede or follow edge `i` in travel direction. A reverse-direction edge is a U-turn, not a continuation. The continuity factor and final score are
+
+`C_i = 1 + 0.25 × mean(P_j for j in N_i)`
+
+`S_i = B_i × C_i`
+
+If `N_i` is empty, `C_i = 1`. The multiplier is dimensionless and lies in `[1, 1.25]`. Averaging the neighbour percentiles means a high-scoring neighbour can lift a score by at most 25%, while additional branches do not multiply the lift. The cap keeps route volume and gap length primary: continuity alone cannot overturn a base-score difference greater than 25%.
+
+Percentile normalization is used instead of `log1p(score) / log1p(max_score)`. The percentile expresses relative ordering within a scenario and is not stretched by the magnitude of an extreme score; this suits continuity as a secondary ranking adjustment. Log normalization retains more magnitude information but depends on the scenario maximum and can compress ordinary edges when that maximum is an outlier. Tied scores receive the same average-rank percentile.
+
+Degenerate cases are neutral: an isolated gap has no neighbours and factor `1`; all-zero route volumes produce no scored gaps in `detect_gaps_and_score_edges`; a single-edge graph has factor `1`; zero base scores have percentile `0`; ties use average rank.
+
+#### Worked fixture example
+
+The checkout does not contain `data/processed/edges.parquet`; the committed edge and route fixtures are synthetic and use Budapest-coordinate geometries, not real OpenStreetMap (OSM) ways. The following hand calculation is therefore a reproducible fixture example, **not** a real-edge result. A verified example on real Budapest edges remains pending that network input.
+
+In the baseline fixture, the three gap base scores are `n1-n5-0: 180 × 950 = 171,000`, `n1-n3-0: 210 × 720 = 151,200`, and `n2-n1-0: 115 × 450 = 51,750` trip-metres. Their percentiles are respectively `1`, `0.5`, and `0`. Edge `n2-n1-0` ends at node `n1`, where `n1-n3-0` and `n1-n5-0` are its two forward gap neighbours. Their mean percentile is `(0.5 + 1) / 2 = 0.75`, so its factor is `1 + 0.25 × 0.75 = 1.1875` and its score is `51,750 × 1.1875 = 61,453.125` trip-metres. The other two edges have only a zero-percentile predecessor and retain factor `1`.

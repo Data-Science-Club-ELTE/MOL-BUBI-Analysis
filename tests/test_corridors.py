@@ -1,7 +1,7 @@
-"""Tests for detect_gaps_and_score_edges (issue #21) and merge_edges_into_corridors (#37).
+"""Tests for gap scoring (issues #21 and #54) and corridor merging (#37).
 
-Every expected edge score is worked out by hand as volume x length_m x continuity_factor;
-every corridor score as the sum of its edges' scores.
+Every expected edge score and continuity factor is worked out by hand; every corridor
+score is the sum of its edges' scores.
 """
 
 import random
@@ -13,6 +13,7 @@ from shapely.geometry import LineString
 
 from bubi.contracts.schemas import CorridorsSchema, EdgeScoresSchema
 from bubi.corridors import (
+    calculate_continuity_factors,
     calculate_edge_route_volumes,
     detect_gaps_and_score_edges,
     merge_edges_into_corridors,
@@ -70,16 +71,44 @@ def test_one_sided_lane_keeps_only_the_missing_direction():
     assert row_of(result, "b-a-0")["score"] == 30 * 100  # 3000
 
 
-def test_score_is_volume_times_length_times_continuity():
+def test_isolated_gap_keeps_its_base_score():
     edges = make_edges([("a-b-0", 250, False)])
     volumes = make_volumes([("baseline", "a-b-0", 12)])
 
-    default = detect_gaps_and_score_edges(edges, volumes)
-    doubled = detect_gaps_and_score_edges(edges, volumes, continuity_factor=2.0)
+    result = detect_gaps_and_score_edges(edges, volumes)
 
-    assert row_of(default, "a-b-0")["score"] == 12 * 250 * 1.0  # 3000
-    assert row_of(doubled, "a-b-0")["score"] == 12 * 250 * 2.0  # 6000
-    assert row_of(default, "a-b-0")["volume"] == 12
+    assert row_of(result, "a-b-0")["score"] == 12 * 250  # 3000
+    assert row_of(result, "a-b-0")["volume"] == 12
+
+
+def test_continuity_factors_use_hand_computed_percentiles_with_zero_and_tie():
+    gap_scores = pd.DataFrame(
+        [
+            ("baseline", "a-b-0", 100.0),
+            ("baseline", "b-c-0", 300.0),
+            ("baseline", "c-d-0", 300.0),
+            ("baseline", "x-y-0", 0.0),
+        ],
+        columns=["scenario", "edge_id", "base_score"],
+    )
+
+    factors = calculate_continuity_factors(gap_scores)
+
+    assert factors.tolist() == pytest.approx([1.1875, 1.09375, 1.1875, 1.0])
+
+
+def test_all_zero_and_single_edge_continuity_are_neutral():
+    all_zero = pd.DataFrame(
+        [("baseline", "a-b-0", 0.0), ("baseline", "b-c-0", 0.0)],
+        columns=["scenario", "edge_id", "base_score"],
+    )
+    single_edge = pd.DataFrame(
+        [("baseline", "a-b-0", 100.0)],
+        columns=["scenario", "edge_id", "base_score"],
+    )
+
+    assert calculate_continuity_factors(all_zero).tolist() == [1.0, 1.0]
+    assert calculate_continuity_factors(single_edge).tolist() == [1.0]
 
 
 def test_rank_is_per_scenario_highest_score_first():
@@ -165,12 +194,14 @@ def test_lane_flag_given_as_text_raises():
         detect_gaps_and_score_edges(edges, volumes)
 
 
-def test_negative_continuity_factor_raises():
-    edges = make_edges([("a-b-0", 100, False)])
-    volumes = make_volumes([("baseline", "a-b-0", 9)])
+def test_negative_base_score_for_continuity_raises():
+    gap_scores = pd.DataFrame(
+        [("baseline", "a-b-0", -1.0)],
+        columns=["scenario", "edge_id", "base_score"],
+    )
 
-    with pytest.raises(ValueError, match="continuity_factor"):
-        detect_gaps_and_score_edges(edges, volumes, continuity_factor=-1.0)
+    with pytest.raises(ValueError, match="base_score must be finite and non-negative"):
+        calculate_continuity_factors(gap_scores)
 
 
 def test_repo_fixtures_end_to_end(sample_edges, sample_routes):
@@ -186,7 +217,7 @@ def test_repo_fixtures_end_to_end(sample_edges, sample_routes):
 
     baseline = result[result["scenario"] == "baseline"]
     assert baseline["edge_id"].tolist() == ["n1-n5-0", "n1-n3-0", "n2-n1-0"]
-    assert baseline["score"].tolist() == [180 * 950, 210 * 720, 115 * 450]
+    assert baseline["score"].tolist() == pytest.approx([180 * 950, 210 * 720, 115 * 450 * 1.1875])
     assert baseline["rank"].tolist() == [1, 2, 3]
 
     assert row_of(result, "n1-n3-0", "lane_aware")["score"] == 95 * 720
@@ -415,6 +446,6 @@ def test_repo_fixtures_corridors_end_to_end(sample_edges, sample_routes):
     assert corridor_list(result) == [
         (["n1-n5-0"], 180 * 950, 1),
         (["n1-n3-0"], 210 * 720, 2),
-        (["n2-n1-0"], 115 * 450, 3),
+        (["n2-n1-0"], 115 * 450 * 1.1875, 3),
     ]
     assert result.loc[result["scenario"] == "lane_aware", "corridor_id"].tolist() == ["corr_la_01"]

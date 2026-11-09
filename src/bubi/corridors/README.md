@@ -11,7 +11,7 @@
 2. **Missing-Lane Filter**: Filter directed edges where `has_dedicated_lane == False` in that specific travel direction (Decision D3).
 3. **Edge Scoring**:
    $$\text{score} = \text{route volume} \times \text{gap length (m)} \times \text{continuity factor}$$
-   - Continuity factor rewards edges connecting to adjacent high-scoring gaps (agreed in week 4).
+   - Continuity uses connected gap edges' within-scenario score percentiles and adds at most 25%.
 4. **Corridor Merging**: Group adjacent missing-lane edges traveling in the same direction into coherent corridors.
 5. **Ranking**: Assign ranks per scenario.
 
@@ -68,7 +68,7 @@ Rules:
 
 1. **Direction (D3)**: an edge is dropped only if `has_dedicated_lane` is `True` for that directed edge. A road with a lane in one direction and none in the other keeps only the missing direction.
 2. Only edges with `volume > 0` are scored.
-3. `score = volume × length_m × continuity_factor`. The gap length is the whole edge length; `continuity_factor` stays `1.0` until week 4.
+3. `base_score = volume × length_m`; `score = base_score × continuity_factor`. The dimensionless continuity factor is `1 + 0.25 × mean(neighbour percentiles)` for directly connected gap edges in the same scenario, and is `1.0` when there are no neighbours. Its maximum is `1.25`; see the [scoring methodology](../../../bubi-technical-design.md#15-methodology-appendix).
 4. `rank` restarts at 1 in each scenario, highest score first. Ties go to higher volume, then `edge_id`, so ranks are unique and repeatable.
 5. Output is sorted by scenario, then rank.
 6. A volume row whose `edge_id` is missing from `edges` raises `ValueError`: routes and edges must come from the same frozen graph.
