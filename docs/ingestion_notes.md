@@ -75,7 +75,7 @@ A second request about 4.5 hours later (21:08 UTC, 962 records) was compared wit
 | Frozen Futár snapshot | `data/raw/futar_bicycle_rental_20261018T163442Z.json` | No (`data/raw/` is ignored) | Drive `MOL-BUBI_DSC/raw_futar_bicycle_rental` | `stations` |
 | Second Futár snapshot and both `.meta.json` files | `data/raw/` | No | Same Drive folder | None; kept as evidence (§6) |
 | Processed stations table | `data/processed/stations.parquet` | Yes | The repository | Input to `candidates` and `trips` |
-| Population raster | `data/raw/hun_pop_2026_CN_100m_R2025A_v1.tif` (clipped: `data/raw/pop_2026_budapest_bbox.tif`) | No | Project shared Drive | `population` (#23) |
+| Population raster | `data/raw/pop_2026_budapest_bbox.tif` (492 × 312 window of `hun_pop_2026_CN_100m_R2025A_v1.tif`; same window as the earlier `worldpop2026_density.tif`) | No (`data/raw/` is ignored) | Project shared Drive | `population` (#23); ODbL 1.0, see `docs/population_source.md` |
 | OSM street and walking graphs | Not decided | No | Not decided | `edges` (#15); snapshot date is an open question in `docs/source_inventory.md` §1 |
 | Real trips and GPS points | None received | No | None | Not wired into the pipeline yet; see `src/bubi/ingestion/README.md` §8 |
 
@@ -177,7 +177,7 @@ Without the raw snapshot, the `stations` table is reported as `FAIL` with the mi
 
 ## 11. Population raster and table (Issue #23)
 
-- Source: WorldPop Hungary 2026 constrained, release R2025A v1, 100 m nominal (3 arc-second), EPSG:4326, Float32, NoData −99999, CC-BY-4.0. File: `data/raw/hun_pop_2026_CN_100m_R2025A_v1.tif`.
+- Source: WorldPop Hungary 2026 constrained, release R2025A v1, 100 m nominal (3 arc-second), EPSG:4326, Float32, NoData −99999, ODbL 1.0 (WorldPop's licence carve-out for constrained products; see `docs/population_source.md` §8). File: `data/raw/hun_pop_2026_CN_100m_R2025A_v1.tif`.
 - Clipped study-area raster: `data/raw/pop_2026_budapest_bbox.tif`, 492 × 312 pixels, 547,749 bytes, SHA-256 `936e282432b62896bb347a440ccf83a7c824b210fb2ac35902205c4168b36f6c`. It is uploaded to the project shared Drive folder together with the other raw inputs.
 - Clip command (no resampling, native grid):
 

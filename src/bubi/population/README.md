@@ -16,6 +16,10 @@
 The raster is clipped with GDAL rather than reprojected: the pixels stay on their native
 EPSG:4326 grid, so population counts are copied without resampling.
 
+Source selection and licence: WorldPop R2025A v1 constrained, epoch 2026, **ODbL 1.0**.
+The comparison, the share-alike consequence and the required attribution string are in
+`docs/population_source.md`.
+
 ---
 
 ## 2. Data Contracts

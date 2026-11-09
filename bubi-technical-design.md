@@ -138,7 +138,7 @@ At this revision the end-to-end pipeline **cannot** run: network, population, ro
 | Environment and dependency pinning | `uv`; `uv.lock` records resolved versions; editable install with `uv pip install -e ".[dev]"` |
 | Data handling | `pandas`, `GeoPandas`, `Shapely`, `pyarrow` |
 | Street network | `OSMnx` (street and walking graphs), `NetworkX` |
-| Population data | WorldPop (gridded population dataset; config default `worldpop_2026_100m`) or GHSL (Global Human Settlement Layer); the source is not final (see §14) |
+| Population data | WorldPop R2025A v1, constrained, epoch 2026 (`worldpop_2026_100m`), under ODbL 1.0 with a pinned checksum (`docs/source_inventory.md` §2). GHSL GHS-POP R2023A was evaluated with the same method and stays the CC BY alternative (`docs/population_source.md`) |
 | Spatial index | H3 (hexagonal spatial index), resolution 9 |
 | Projection | `pyproj`: coordinate reference system (CRS) EPSG:4326 for exchange, EPSG:23700 for measurement |
 | Storage and checks | Parquet and GeoParquet tables, `pandera[geopandas]` schemas, YAML configuration |
@@ -552,7 +552,7 @@ Built-in boundaries of what the results can claim; each is documented in the met
 - ~~Resolve BKK Futár licensing, attribution, and raw-snapshot redistribution terms.~~ Resolved 2026-11-04: CC BY 4.0, attribution "Data source: BKK Zrt., CC BY 4.0" (`docs/source_inventory.md` §4). The dashboard shows it below the map.
 - Record the OSM extract date and store or document the frozen graph artifact behind the `budapest_osm_2026w1` label.
 - Confirm the exact DEM product and version behind `copernicus_dem_30m`.
-- Confirm the population product, year, and licence: config names `worldpop_2026_100m`, while the source inventory still lists WorldPop versus GHSL as unresolved.
+- ~~Confirm the population product, year, and licence: config names `worldpop_2026_100m`, while the source inventory still lists WorldPop versus GHSL as unresolved.~~ Resolved 2026-11-08: WorldPop R2025A v1, constrained, epoch 2026, under ODbL 1.0, checksum `e13123be…f5fd` (`docs/source_inventory.md` §2). The WorldPop-versus-GHSL comparison behind the choice, including GHSL's +9.8% Budapest bias, is in `docs/population_source.md`.
 
 ### 14.2 Network and geometry
 
