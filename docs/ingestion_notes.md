@@ -75,7 +75,7 @@ A second request about 4.5 hours later (21:08 UTC, 962 records) was compared wit
 | Frozen Futár snapshot | `data/raw/futar_bicycle_rental_20261018T163442Z.json` | No (`data/raw/` is ignored) | Drive `MOL-BUBI_DSC/raw_futar_bicycle_rental` | `stations` |
 | Second Futár snapshot and both `.meta.json` files | `data/raw/` | No | Same Drive folder | None; kept as evidence (§6) |
 | Processed stations table | `data/processed/stations.parquet` | Yes | The repository | Input to `candidates` and `trips` |
-| Population raster | `data/raw/worldpop2026_density.tif` (window of `hun_pop_2026_CN_100m_R2025A_v1.tif`) | No (`data/raw/` is ignored) | Not yet copied anywhere | `population` (#23); WorldPop 2026 constrained decided, checksum in `docs/source_inventory.md` §2 and `docs/population_source.md` |
+| Population raster | `data/raw/pop_2026_budapest_bbox.tif` (492 × 312 window of `hun_pop_2026_CN_100m_R2025A_v1.tif`; same window as the earlier `worldpop2026_density.tif`) | No (`data/raw/` is ignored) | Project shared Drive | `population` (#23); ODbL 1.0, see `docs/population_source.md` |
 | OSM street and walking graphs | Not decided | No | Not decided | `edges` (#15); snapshot date is an open question in `docs/source_inventory.md` §1 |
 | Real trips and GPS points | None received | No | None | Not wired into the pipeline yet; see `src/bubi/ingestion/README.md` §8 |
 
@@ -174,3 +174,23 @@ Reproducibility per processed table:
 ```
 
 Without the raw snapshot, the `stations` table is reported as `FAIL` with the missing file name, the other tables as `FAIL` (not run), and the command exits with 1.
+
+## 11. Population raster and table (Issue #23)
+
+- Source: WorldPop Hungary 2026 constrained, release R2025A v1, 100 m nominal (3 arc-second), EPSG:4326, Float32, NoData −99999, ODbL 1.0 (WorldPop's licence carve-out for constrained products; see `docs/population_source.md` §8). File: `data/raw/hun_pop_2026_CN_100m_R2025A_v1.tif`.
+- Clipped study-area raster: `data/raw/pop_2026_budapest_bbox.tif`, 492 × 312 pixels, 547,749 bytes, SHA-256 `936e282432b62896bb347a440ccf83a7c824b210fb2ac35902205c4168b36f6c`. It is uploaded to the project shared Drive folder together with the other raw inputs.
+- Clip command (no resampling, native grid):
+
+  ```bash
+  gdal_translate -projwin_srs EPSG:4326 \
+    -projwin 18.92 47.61 19.33 47.35 \
+    -co COMPRESS=LZW -co PREDICTOR=2 \
+    data/raw/hun_pop_2026_CN_100m_R2025A_v1.tif \
+    data/raw/pop_2026_budapest_bbox.tif
+  ```
+
+- Build: `make population` (runs `scripts/clip_population.py` and `scripts/build_population.py`). Config keys: `demand.population_source`, `demand.population_source_file`, `demand.population_raster_file`, `spatial.h3_resolution`.
+- Method: area-weighted overlap in EPSG:23700; a pixel contributes `value × overlap fraction`, assuming people are evenly spread inside the pixel. Only cells wholly inside the study bbox are published, so edge cells are never computed from truncated coverage.
+- Result on 2026-11-09: 8,155 cells (7,410 populated, 745 zero), total 1,901,537.4 people. The clipped raster sums 1,918,669.1; the 17,131.7 difference (0.89%) is the dropped edge ring.
+- Checks performed: clipped raster sum equals the same window summed from the country raster (difference 0.0); the Parquet sum equals the clipped raster sum minus the edge ring; cell IDs are unique valid H3 indices with no negative populations; the table validates against `PopulationSchema`.
+- Follow-up: `scripts/run_pipeline.py` still declares the `population` stage as blocked by #23. Wiring it is separate because the pipeline test setup does not provide a raster.
