@@ -27,12 +27,11 @@ def _project(lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
     x, y = _TO_EOV.transform(lon, lat)
     return np.column_stack([x, y])
 
+
 DEFAULT_BETA_DECAY = 0.0006666667
 
 
-def demand_weighted_mean_trip_distance(
-    df_trips: pd.DataFrame, df_stations: pd.DataFrame
-) -> float:
+def demand_weighted_mean_trip_distance(df_trips: pd.DataFrame, df_stations: pd.DataFrame) -> float:
     """Return the trip-count-weighted mean straight-line distance in metres."""
     trips = TripMatrixSchema.validate(df_trips)
     stations = StationsSchema.validate(df_stations)

@@ -24,7 +24,8 @@ def test_fixture_trip_matrix_has_reportable_mean(sample_stations, sample_populat
     TripMatrixSchema.validate(trips)
     assert not trips.empty
     assert trips["trip_count"].sum() == pytest.approx(
-        0.05 * assign_catchment_population(sample_stations, sample_population)[
+        0.05
+        * assign_catchment_population(sample_stations, sample_population)[
             "catchment_population"
         ].sum()
     )
