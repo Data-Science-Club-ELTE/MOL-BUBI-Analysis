@@ -118,7 +118,7 @@ CorridorsSchema = DataFrameSchema(
         "corridor_id": Column(str, nullable=False, coerce=True),
         "edge_ids": Column(object, nullable=False),  # list or json string of edge_ids
         "score": Column(float, Check.greater_than_or_equal_to(0.0), nullable=False, coerce=True),
-        "rank": Column(int, Check.greater_than(0), nullable=False, coerce=True),
+        "rank": Column(int, nullable=False, coerce=True),
     },
     strict=True,
     coerce=True,
