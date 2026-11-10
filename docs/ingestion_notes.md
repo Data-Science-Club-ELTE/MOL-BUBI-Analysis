@@ -75,7 +75,7 @@ A second request about 4.5 hours later (21:08 UTC, 962 records) was compared wit
 | Frozen Futár snapshot | `data/raw/futar_bicycle_rental_20261018T163442Z.json` | No (`data/raw/` is ignored) | Drive `MOL-BUBI_DSC/raw_futar_bicycle_rental` | `stations` |
 | Second Futár snapshot and both `.meta.json` files | `data/raw/` | No | Same Drive folder | None; kept as evidence (§6) |
 | Processed stations table | `data/processed/stations.parquet` | Yes | The repository | Input to `candidates` and `trips` |
-| Population raster | `data/raw/pop_2026_budapest_bbox.tif` (492 × 312 window of `hun_pop_2026_CN_100m_R2025A_v1.tif`; same window as the earlier `worldpop2026_density.tif`) | No (`data/raw/` is ignored) | Project shared Drive | `population` (#23); ODbL 1.0, see `docs/population_source.md` |
+| Population raster | `data/raw/pop_2026_budapest_bbox.tif` (492 × 312 window of `hun_pop_2026_CN_100m_R2025A_v1.tif`; same window as the earlier `worldpop2026_density.tif`) | No (`data/raw/` is ignored) | Drive `MOL-BUBI_DSC/raw_population` | `population`; ODbL 1.0, see `docs/population_source.md` |
 | OSM street and walking graphs | Not decided | No | Not decided | `edges` (#15); snapshot date is an open question in `docs/source_inventory.md` §1 |
 | Real trips and GPS points | None received | No | None | Not wired into the pipeline yet; see `src/bubi/ingestion/README.md` §8 |
 
@@ -91,13 +91,15 @@ Git ignores `data/raw/`, `data/cache/`, `data/interim/` and `.env`. Git does **n
 sha256sum data/raw/futar_bicycle_rental_20261018T163442Z.json
 ```
 
+4. Download `pop_2026_budapest_bbox.tif` from the Drive folder `MOL-BUBI_DSC/raw_population` and put it in `data/raw/`. Its SHA-256 is listed in §11. The `population` stage fails and names this file if it is missing.
+
 ### 10.3 Environment variables
 
 | Name | Needed for | Where it is set |
 |---|---|---|
 | `BKK_FUTAR_API_KEY` | Fetching a **new** Futár snapshot (`python -m bubi.ingestion.futar_snapshot`, or `ingest_futar_stations` without `raw_path`) | Shell environment or the git-ignored `.env`; template in `.env.example` |
 
-The pipeline and the reproducibility check need no environment variables. They read the saved snapshot only and make no API requests, so runs are reproducible against the frozen snapshot.
+The pipeline and the reproducibility check need no environment variables. They read the saved raw files only and make no API requests, so runs are reproducible against the frozen snapshot.
 
 ### 10.4 Running the pipeline
 
@@ -117,30 +119,30 @@ This runs `scripts/run_pipeline.py`. The script runs these stages in order: `sta
 
 `edge_volumes.parquet` is an intermediate table, not one of the seven contract tables. It is validated against the `scenario`, `edge_id` and `volume` columns of `EdgeScoresSchema`. The `trips` stage builds the `baseline` scenario only; the other scenarios wait on the scenario storage-layout decision.
 
-Result on 2026-10-27, with the frozen snapshot restored:
+#### Partial run on real data (#76)
+
+The pipeline uses only real inputs: the frozen Futár snapshot and the WorldPop raster. Nothing from `tests/fixtures/` is read. Stages whose input is not available yet are reported as `BLOCKED` with the open issue they wait on.
+
+Result on 2026-11-10, with both raw files restored (§10.2), run twice:
 
 ```text
 stations    DONE      data/processed/stations.parquet  704 rows, unchanged
-population  BLOCKED   data/processed/population.parquet  module not implemented yet, owned by #23
+population  DONE      data/processed/population.parquet  8155 rows, unchanged
 edges       BLOCKED   data/processed/edges.parquet  module not implemented yet, owned by #15
 candidates  BLOCKED   data/processed/station_candidates.parquet  module not implemented yet, owned by #39
-trips       BLOCKED   data/processed/trip_matrix.parquet  upstream: population (#23)
-routes      BLOCKED   data/processed/routes.parquet  module not implemented yet, owned by #36
-volumes     BLOCKED   data/processed/edge_volumes.parquet  upstream: routes (#36)
-scores      BLOCKED   data/processed/edge_scores.parquet  module not implemented yet, owned by #21
-corridors   BLOCKED   data/processed/corridors.parquet  module not implemented yet, owned by #37
+trips       DONE      data/processed/trip_matrix.parquet  126380 rows, unchanged
+routes      BLOCKED   data/processed/routes.parquet  module not implemented yet, owned by #15
+volumes     BLOCKED   data/processed/edge_volumes.parquet  upstream: routes (#15)
+scores      BLOCKED   data/processed/edge_scores.parquet  upstream: edges (#15), volumes (via routes (#15))
+corridors   BLOCKED   data/processed/corridors.parquet  upstream: edges (#15), scores (via edges (#15), volumes (via routes (#15)))
 ```
 
-The `trips` and `volumes` stages run once their inputs exist. `tests/test_run_pipeline.py` runs them on the sample population and routes fixtures.
+- `stations`, `population` and `trips` are built from real data. `population.parquet` matches the table from `make population` (§11) exactly. `trip_matrix.parquet` is the `baseline` scenario on the 704 Futár stations.
+- The second run left every file unchanged.
+- `routes` waits on the edges table (#15), not on its own module: route generation (#36) is merged.
+- `scores` (#21) and `corridors` (#37) are implemented and wait only on their inputs.
 
-Since #21 and #37 the `scores` stage runs `detect_gaps_and_score_edges` with a graph-derived continuity factor (§15 of `bubi-technical-design.md`), and the `corridors` stage runs `merge_edges_into_corridors`. Both are no longer blocked by their own issue; they wait only on their inputs. With the same inputs as above, their lines now read:
-
-```text
-scores      BLOCKED   data/processed/edge_scores.parquet  upstream: edges (#15), volumes (via routes (#36))
-corridors   BLOCKED   data/processed/corridors.parquet  upstream: edges (#15), scores (via edges (#15), volumes (via routes (#36)))
-```
-
-`tests/test_run_pipeline.py` runs both on the sample edges and routes fixtures and checks that a second run rewrites nothing. List cells, such as `corridors.edge_ids`, come back from Parquet as NumPy arrays, so the "unchanged" check compares them as tuples.
+`tests/test_run_pipeline.py` covers the same stages with a small generated raster and the sample edges and routes fixtures, and checks that a second run rewrites nothing. List cells, such as `corridors.edge_ids`, come back from Parquet as NumPy arrays, so the "unchanged" check compares them as tuples.
 
 ### 10.5 Reproducibility check
 
@@ -152,28 +154,28 @@ python scripts/check_reproducibility.py --install    # also runs `make install` 
 The script works in four steps:
 
 1. It clones the repository into a temporary directory. Only committed files are checked.
-2. It copies the frozen snapshot from `data/raw/` into the clone (`--raw-dir` changes the source).
+2. It copies the frozen snapshot and the population raster from `data/raw/` into the clone (`--raw-dir` changes the source).
 3. It runs `make run-pipeline` in the clone.
 4. It reports `PASS`, `BLOCKED` or `FAIL` for each processed table.
 
 A committed table that comes out different from its committed copy is a `FAIL`. The command exits with 1 if any table fails. Without `--install`, the clone runs with the current interpreter and with its own `src/` first on `PYTHONPATH`.
 
-Result on 2026-10-27, run both with and without `--install`:
+Result on 2026-11-10 (commit `35b4187`), the same with and without `--install`:
 
 ```text
 Reproducibility per processed table:
   PASS     data/processed/stations.parquet  rebuilt identically to the committed copy
-  BLOCKED  data/processed/population.parquet  module not implemented yet, owned by #23
+  PASS     data/processed/population.parquet  rebuilt identically to the committed copy
   BLOCKED  data/processed/edges.parquet  module not implemented yet, owned by #15
   BLOCKED  data/processed/station_candidates.parquet  module not implemented yet, owned by #39
-  BLOCKED  data/processed/trip_matrix.parquet  upstream: population (#23)
-  BLOCKED  data/processed/routes.parquet  module not implemented yet, owned by #36
-  BLOCKED  data/processed/edge_volumes.parquet  upstream: routes (#36)
-  BLOCKED  data/processed/edge_scores.parquet  module not implemented yet, owned by #21
-  BLOCKED  data/processed/corridors.parquet  module not implemented yet, owned by #37
+  PASS     data/processed/trip_matrix.parquet  rebuilt identically to the committed copy
+  BLOCKED  data/processed/routes.parquet  module not implemented yet, owned by #15
+  BLOCKED  data/processed/edge_volumes.parquet  upstream: routes (#15)
+  BLOCKED  data/processed/edge_scores.parquet  upstream: edges (#15), volumes (via routes (#15))
+  BLOCKED  data/processed/corridors.parquet  upstream: edges (#15), scores (via edges (#15), volumes (via routes (#15)))
 ```
 
-Without the raw snapshot, the `stations` table is reported as `FAIL` with the missing file name, the other tables as `FAIL` (not run), and the command exits with 1.
+If a raw file is missing, the stage that reads it is reported as `FAIL` with the file name, the later tables as `FAIL` (not run), and the command exits with 1.
 
 ## 11. Population raster and table (Issue #23)
 
@@ -193,4 +195,4 @@ Without the raw snapshot, the `stations` table is reported as `FAIL` with the mi
 - Method: area-weighted overlap in EPSG:23700; a pixel contributes `value × overlap fraction`, assuming people are evenly spread inside the pixel. Only cells wholly inside the study bbox are published, so edge cells are never computed from truncated coverage.
 - Result on 2026-11-09: 8,155 cells (7,410 populated, 745 zero), total 1,901,537.4 people. The clipped raster sums 1,918,669.1; the 17,131.7 difference (0.89%) is the dropped edge ring.
 - Checks performed: clipped raster sum equals the same window summed from the country raster (difference 0.0); the Parquet sum equals the clipped raster sum minus the edge ring; cell IDs are unique valid H3 indices with no negative populations; the table validates against `PopulationSchema`.
-- Follow-up: `scripts/run_pipeline.py` still declares the `population` stage as blocked by #23. Wiring it is separate because the pipeline test setup does not provide a raster.
+- Pipeline: the `population` stage of `scripts/run_pipeline.py` calls the same `aggregate_population_to_h3` with the same config keys (#76); see §10.4.
