@@ -19,6 +19,9 @@ from bubi.corridors import (
     merge_edges_into_corridors,
 )
 
+# Offline by contract (#78): any network access fails the test.
+pytestmark = pytest.mark.usefixtures("no_network")
+
 
 def make_edges(rows):
     """rows: (edge_id, length_m, has_dedicated_lane) tuples -> EdgesSchema-shaped GeoDataFrame."""
