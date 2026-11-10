@@ -268,7 +268,9 @@ def calculate_continuity_factors(df_gap_scores: pd.DataFrame) -> pd.Series:
                 if ends[gaps.at[neighbour, "edge_id"]] != (end_node, start_node)
             }
             if neighbours:
-                neighbour_mean = np.mean([percentile_by_index[n] for n in sorted(neighbours)])
+                # Summed in value order, not row order: float addition is not associative, so
+                # reordering the input rows could otherwise flip a tie in the final ranking.
+                neighbour_mean = np.mean(sorted(percentile_by_index[n] for n in neighbours))
                 factors[index] = 1.0 + CONTINUITY_WEIGHT * neighbour_mean
 
     return pd.Series(factors, index=df_gap_scores.index, name="continuity_factor")
