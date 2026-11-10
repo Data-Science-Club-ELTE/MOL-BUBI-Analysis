@@ -1,5 +1,6 @@
 """Shared pytest fixtures for MOL Bubi recommender tests."""
 
+import socket
 from pathlib import Path
 
 import pytest
@@ -54,3 +55,15 @@ def sample_corridors(fixtures_dir: Path):
 @pytest.fixture
 def sample_trip_matrix(fixtures_dir: Path):
     return load_contract_table("trip_matrix", fixtures_dir / "sample_trip_matrix.parquet")
+
+
+@pytest.fixture
+def no_network(monkeypatch):
+    """Fail any test that opens a network connection, so CI never waits on a download."""
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("this test must run offline but tried to open a network connection")
+
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket.socket, "connect_ex", refuse)
+    monkeypatch.setattr(socket, "create_connection", refuse)
