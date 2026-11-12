@@ -9,6 +9,9 @@ from bubi.corridors import calculate_edge_route_volumes
 # EdgeScoresSchema restricted to the fields this step produces (score/rank come later).
 VolumeSchema = EdgeScoresSchema.select_columns(["scenario", "edge_id", "volume"])
 
+# Offline by contract (#78): any network access fails the test.
+pytestmark = pytest.mark.usefixtures("no_network")
+
 
 def make_routes(rows):
     """rows: (scenario, edges, trip_count) tuples -> RoutesSchema-shaped DataFrame."""
