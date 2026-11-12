@@ -448,4 +448,90 @@ def test_repo_fixtures_corridors_end_to_end(sample_edges, sample_routes):
         (["n1-n3-0"], 210 * 720, 2),
         (["n2-n1-0"], 115 * 450 * 1.1875, 3),
     ]
+    assert corridor_list(result, "lane_aware") == [(["n1-n3-0"], 95 * 720, 1)]
+    assert corridor_list(result, "population_only") == [(["n1-n5-0"], 140 * 950, 1)]
     assert result.loc[result["scenario"] == "lane_aware", "corridor_id"].tolist() == ["corr_la_01"]
+
+
+# ------------------------------------------- routes -> edge scores -> corridors (#59)
+
+
+def test_one_sided_road_appears_once_from_routes_to_corridors():
+    # Road a<->b has a lane only from a to b; road b<->c has no lane either way.
+    edges = make_edges([*ONE_SIDED_ROAD, ("b-c-0", 100, False), ("c-b-0", 100, False)])
+    routes = pd.DataFrame(
+        [
+            (scenario, edge_list, trips * multiplier)
+            for scenario, multiplier in (("baseline", 1), ("lane_aware", 2), ("population_only", 3))
+            for edge_list, trips in ((["a-b-0", "b-c-0"], 40), (["c-b-0", "b-a-0"], 30))
+        ],
+        columns=["scenario", "edges", "trip_count"],
+    )
+
+    scores = detect_gaps_and_score_edges(edges, calculate_edge_route_volumes(routes))
+    corridors = merge_edges_into_corridors(edges, scores)
+
+    EdgeScoresSchema.validate(scores)
+    CorridorsSchema.validate(corridors)
+    for scenario, multiplier in (("baseline", 1), ("lane_aware", 2), ("population_only", 3)):
+        in_scores = scores.loc[scores["scenario"] == scenario, "edge_id"].tolist()
+        chains = [list(ids) for ids in corridors.loc[corridors["scenario"] == scenario, "edge_ids"]]
+        in_corridors = [edge_id for chain in chains for edge_id in chain]
+        assert "a-b-0" not in in_scores and "a-b-0" not in in_corridors
+        assert in_scores.count("b-a-0") == 1 and in_corridors.count("b-a-0") == 1
+        assert not any({"b-c-0", "c-b-0"} <= set(chain) for chain in chains)
+        # Base scores 4000 (b-c), 3000 (c-b), 3000 (b-a): percentiles 1.0, 0.25, 0.25.
+        # c-b and b-a continue each other, so each gets 1 + 0.25 * 0.25 = 1.0625; b-c only
+        # touches its own reverse, which is a U-turn, so it keeps 1.0. The c-b/b-a tie on
+        # score and volume is broken by edge_id.
+        assert in_scores == ["b-c-0", "b-a-0", "c-b-0"]
+        assert corridor_list(corridors, scenario) == [
+            (["c-b-0", "b-a-0"], 2 * 3187.5 * multiplier, 1),
+            (["b-c-0"], 4000.0 * multiplier, 2),
+        ]
+
+
+def random_gap_inputs(seed):
+    """A random directed network with three scenarios of volumes, about 20% of it laned."""
+    rng = random.Random(seed)
+    nodes = [f"n{i}" for i in range(40)]
+    pairs = sorted({(u, v) for u in nodes for v in nodes if u != v and rng.random() < 0.12})
+    edges = gpd.GeoDataFrame(
+        [
+            {
+                "edge_id": f"{u}-{v}-0",
+                "osm_way_id": rng.randint(1, 8),
+                "length_m": float(rng.randint(5, 60)),
+                "has_dedicated_lane": rng.random() < 0.2,
+                "geometry": LineString([(19.05, 47.49), (19.06, 47.50)]),
+            }
+            for u, v in pairs
+        ],
+        crs="EPSG:4326",
+    )
+    volumes = make_volumes(
+        [
+            (scenario, edge_id, float(rng.randint(0, 30)))
+            for scenario in ("baseline", "lane_aware", "population_only")
+            for edge_id in edges["edge_id"]
+        ]
+    )
+    return edges, volumes
+
+
+def test_ranking_is_identical_across_runs_and_input_row_orders():
+    edges, volumes = random_gap_inputs(seed=3)
+    expected_scores = detect_gaps_and_score_edges(edges, volumes)
+    expected_corridors = merge_edges_into_corridors(edges, expected_scores)
+
+    for seed in range(10):
+        shuffled_edges = edges.sample(frac=1, random_state=seed)
+        scores = detect_gaps_and_score_edges(
+            shuffled_edges, volumes.sample(frac=1, random_state=seed)
+        )
+        corridors = merge_edges_into_corridors(
+            shuffled_edges, scores.sample(frac=1, random_state=seed)
+        )
+        # Exact comparison: a last-digit difference in a score could flip a tie.
+        pd.testing.assert_frame_equal(scores, expected_scores, check_exact=True)
+        pd.testing.assert_frame_equal(corridors, expected_corridors, check_exact=True)
