@@ -43,6 +43,7 @@ from bubi.corridors import (
 from bubi.demand import generate_synthetic_trips
 from bubi.ingestion import ingest_futar_stations
 from bubi.ingestion.futar_snapshot import IngestionError
+from bubi.population.grid import aggregate_population_to_h3
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = Path("config/default_config.yaml")
@@ -86,6 +87,15 @@ def _run_stations(inputs: list[Path], config: dict) -> pd.DataFrame:
             f"{raw_path} has SHA-256 {actual}, but config stations.snapshot_sha256 is {expected}"
         )
     return ingest_futar_stations(raw_path=raw_path)
+
+
+def _run_population(inputs: list[Path], config: dict) -> pd.DataFrame:
+    (raster_path,) = inputs
+    return aggregate_population_to_h3(
+        raster_path,
+        h3_resolution=config["spatial"]["h3_resolution"],
+        bbox=tuple(config["spatial"]["study_area_bbox"]),
+    )
 
 
 def _run_trips(inputs: list[Path], config: dict) -> pd.DataFrame:
@@ -133,8 +143,7 @@ def build_stages(config: dict) -> list[Stage]:
     routes = f"{PROCESSED}/routes.parquet"
     volumes = f"{PROCESSED}/edge_volumes.parquet"
     scores = f"{PROCESSED}/edge_scores.parquet"
-    # Population and edges have no declared raw input yet: the source products are still
-    # open questions in docs/source_inventory.md.
+    # Edges have no declared raw input yet: the network build is still open in #15.
     return [
         Stage(
             "stations",
@@ -143,7 +152,13 @@ def build_stages(config: dict) -> list[Stage]:
             "stations",
             run=_run_stations,
         ),
-        Stage("population", (), population, "population", blocked_by="#23"),
+        Stage(
+            "population",
+            (f"{raw_dir}/{config['demand']['population_raster_file']}",),
+            population,
+            "population",
+            run=_run_population,
+        ),
         Stage("edges", (), edges, "edges", blocked_by="#15"),
         Stage(
             "candidates",
@@ -153,7 +168,7 @@ def build_stages(config: dict) -> list[Stage]:
             blocked_by="#39",
         ),
         Stage("trips", (stations, population), trips, "trip_matrix", run=_run_trips),
-        Stage("routes", (trips, edges), routes, "routes", blocked_by="#36"),
+        Stage("routes", (trips, edges), routes, "routes", blocked_by="#15"),
         Stage(
             "volumes",
             (routes,),

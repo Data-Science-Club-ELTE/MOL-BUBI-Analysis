@@ -64,13 +64,17 @@ def _restore_raw_inputs(clone: Path, raw_dir: Path) -> None:
     config = yaml.safe_load((clone / "config/default_config.yaml").read_text(encoding="utf-8"))
     target_dir = clone / config["paths"]["data_raw_dir"]
     target_dir.mkdir(parents=True, exist_ok=True)
-    name = config["stations"]["snapshot_file"]
-    source = raw_dir / name
-    if source.exists():
-        shutil.copy2(source, target_dir / name)
-        print(f"restored {name} from {raw_dir}")
-    else:
-        print(f"WARNING: {source} not found; the stations stage will report it as missing")
+    inputs = {
+        "stations": config["stations"]["snapshot_file"],
+        "population": config["demand"]["population_raster_file"],
+    }
+    for stage, name in inputs.items():
+        source = raw_dir / name
+        if source.exists():
+            shutil.copy2(source, target_dir / name)
+            print(f"restored {name} from {raw_dir}")
+        else:
+            print(f"WARNING: {source} not found; the {stage} stage will report it as missing")
 
 
 def check(repo: Path, ref: str, raw_dir: Path, install: bool, workdir: Path) -> int:
