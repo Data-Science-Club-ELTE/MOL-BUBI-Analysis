@@ -77,6 +77,21 @@ The generated trip matrix's demand-weighted mean is calculated from its `trip_co
 |---|---:|---|
 | Synthetic 17 x 17 city grid, 1 km spacing | 2,813.4 m | 186.6 m below the 3,000 m target; within the test tolerance of +/-250 m |
 | Committed sample fixtures | 1,161.9 m | Fixture-only diagnostic; its small and irregular extent is not expected to match the city target |
-| Processed station table + 32-cell H3 population sample | 745.0 m | 704 stations, 650 directed pairs; sample-only diagnostic, not a city-wide estimate |
+| Processed city tables: 704 stations, 8,155 population cells | 1,986.3 m | 1,013.7 m below the 3,000 m target; 126,380 directed pairs (see "City run" below) |
 
-Distances and means use the same EPSG:23700 projection as the generator. The grid result is below the infinite-plane approximation because the finite square has fewer available destinations near its boundaries. `data/processed/population.parquet` is not available; the 32-cell H3 sample is too small to treat its 745.0 m result as city calibration. Re-run the same generator and weighted-mean calculation when full processed city population is available.
+Distances and means use the same EPSG:23700 projection as the generator. The grid result is below the infinite-plane approximation because the finite square has fewer available destinations near its boundaries.
+
+### City run
+
+`data/processed/population.parquet` now exists, so the generator was run on the processed city tables with `python scripts/gravity_mean_distance.py`. Only 356 of the 704 stations have residents within the 350 m walking threshold, and those stations cover 468,416 of the 1,901,537 gridded residents. The baseline matrix has 126,380 directed pairs and 23,420.8 trips, matching `data/processed/trip_matrix.parquet`.
+
+| beta (1/m) | Weighted mean trip distance |
+|---:|---:|
+| 0.0015 (previous default) | 1,149.1 m |
+| 0.0006666667 (current default) | 1,986.3 m |
+| 0.00025 | 2,972.5 m |
+| 0.0002419675 | 3,000.0 m |
+
+The current default misses the 3,000 m target by about a third on the real station network. Two reasons: the 2/beta formula assumes an unbounded plane, while Budapest's stations lie in an area about 20 km by 12 km with most residents in the central stations; and with no distance decay at all (beta = 0) the same run gives 4,261.3 m, so the target is reachable only with a much weaker decay. A beta of about 0.000242 m^-1 would hit 3,000 m on this run.
+
+This is a decision for the project leader. Either keep 0.0006666667, which follows the stated derivation and passes the test on the synthetic grid but gives 1,986 m here, or set beta from the city run. In the second case `gravity_beta` in `config/default_config.yaml`, `DEFAULT_BETA_DECAY`, this section and the test change together. Re-run the script whenever the population or station tables change.
