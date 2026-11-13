@@ -3,7 +3,7 @@
 
 Defaults to the processed city tables:
   python scripts/gravity_mean_distance.py
-  python scripts/gravity_mean_distance.py --betas 0.0006666667 0.00025
+  python scripts/gravity_mean_distance.py --betas 0.0006666667 0.0002419675
 """
 
 import argparse
@@ -24,7 +24,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--stations", default=PROCESSED / "stations.parquet")
     parser.add_argument("--population", default=PROCESSED / "population.parquet")
-    parser.add_argument("--betas", type=float, nargs="+", default=[0.0015, DEFAULT_BETA_DECAY])
+    parser.add_argument(
+        "--betas",
+        type=float,
+        nargs="+",
+        default=[0.0015, 2 / 3_000.0, 0.00025, DEFAULT_BETA_DECAY],
+    )
     args = parser.parse_args()
 
     stations = pd.read_parquet(args.stations)

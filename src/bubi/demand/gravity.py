@@ -28,7 +28,7 @@ def _project(lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
     return np.column_stack([x, y])
 
 
-DEFAULT_BETA_DECAY = 0.0006666667
+DEFAULT_BETA_DECAY = 0.0002419675
 
 
 def demand_weighted_mean_trip_distance(df_trips: pd.DataFrame, df_stations: pd.DataFrame) -> float:
