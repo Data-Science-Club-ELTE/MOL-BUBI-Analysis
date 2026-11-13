@@ -1,4 +1,4 @@
-.PHONY: install test lint format fixtures dashboard measure-dashboard run-pipeline clean
+.PHONY: install test lint format fixtures population dashboard measure-dashboard run-pipeline clean
 
 VENV = .venv
 PYTHON = $(VENV)/bin/python
@@ -10,6 +10,10 @@ install:
 
 fixtures:
 	$(PYTHON) scripts/generate_fixtures.py
+
+population:
+	$(PYTHON) scripts/clip_population.py
+	$(PYTHON) scripts/build_population.py
 
 test:
 	$(PYTHON) -m pytest tests/ -v

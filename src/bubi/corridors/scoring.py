@@ -17,6 +17,8 @@ GAP_VOLUME_COLUMNS = ("scenario", "edge_id", "volume")
 EDGE_SCORE_COLUMNS = ["scenario", "edge_id", "volume", "score", "rank"]
 CORRIDOR_SCORE_COLUMNS = ("scenario", "edge_id", "score")
 CORRIDOR_COLUMNS = ["scenario", "corridor_id", "edge_ids", "score", "rank"]
+CONTINUITY_INPUT_COLUMNS = ("scenario", "edge_id", "base_score")
+CONTINUITY_WEIGHT = 0.25
 # Corridor IDs follow the sample fixture: corr_<scenario code>_<rank>, e.g. corr_bl_01.
 SCENARIO_CODES = {"baseline": "bl", "lane_aware": "la", "population_only": "po"}
 
@@ -203,11 +205,81 @@ def _check_gap_volumes(df_volumes: pd.DataFrame) -> pd.Series:
     return volume
 
 
+def _normalized_score_percentiles(scores: np.ndarray) -> np.ndarray:
+    percentiles = np.zeros(len(scores), dtype="float64")
+    positive = scores > 0
+    positive_count = int(positive.sum())
+    if positive_count == 1 and len(scores) > 1:
+        percentiles[positive] = 1.0
+    elif positive_count > 1:
+        ranks = pd.Series(scores[positive]).rank(method="average").to_numpy()
+        percentiles[positive] = (ranks - 1.0) / (positive_count - 1.0)
+    return percentiles
+
+
+def calculate_continuity_factors(df_gap_scores: pd.DataFrame) -> pd.Series:
+    """Calculate bounded continuity multipliers for scored directed gap edges.
+
+    ``df_gap_scores`` contains one row per scenario and edge, with ``base_score``
+    equal to route volume times gap length. A neighbour is another scored gap edge
+    that can follow or precede the edge in travel direction; a reverse U-turn is
+    not a connection. Neighbour percentiles are averaged, so intersections do not
+    accumulate a larger lift merely because they have more branches.
+
+    Returns a dimensionless Series aligned to the input index. Isolated edges and
+    edges in a single-edge graph receive a factor of 1.0.
+    """
+    missing = [column for column in CONTINUITY_INPUT_COLUMNS if column not in df_gap_scores]
+    if missing:
+        raise ValueError(f"gap scores are missing required column(s): {missing}")
+    if df_gap_scores[["scenario", "edge_id"]].isna().any().any():
+        raise ValueError("gap scores scenario and edge_id must not contain null values")
+    if df_gap_scores.duplicated(["scenario", "edge_id"]).any():
+        raise ValueError("gap scores must have one row per (scenario, edge_id)")
+    base_score = pd.to_numeric(df_gap_scores["base_score"], errors="coerce")
+    if base_score.isna().any() or not np.isfinite(base_score).all() or (base_score < 0).any():
+        raise ValueError("gap scores base_score must be finite and non-negative")
+
+    gaps = df_gap_scores.reset_index(drop=True)
+    ends = {edge_id: _edge_ends(edge_id) for edge_id in gaps["edge_id"]}
+    factors = np.ones(len(gaps), dtype="float64")
+
+    for _, group_indices in gaps.groupby("scenario", sort=False).groups.items():
+        indices = np.asarray(list(group_indices), dtype=int)
+        scores = base_score.iloc[indices].to_numpy(dtype="float64")
+        percentiles = _normalized_score_percentiles(scores)
+
+        starts_at: dict[str, list[int]] = {}
+        ends_at: dict[str, list[int]] = {}
+        for index in indices:
+            start_node, end_node = ends[gaps.at[index, "edge_id"]]
+            starts_at.setdefault(start_node, []).append(index)
+            ends_at.setdefault(end_node, []).append(index)
+
+        percentile_by_index = dict(zip(indices, percentiles, strict=True))
+        for index in indices:
+            edge_id = gaps.at[index, "edge_id"]
+            start_node, end_node = ends[edge_id]
+            neighbours = set(ends_at.get(start_node, ())) | set(starts_at.get(end_node, ()))
+            neighbours.discard(index)
+            neighbours = {
+                neighbour
+                for neighbour in neighbours
+                if ends[gaps.at[neighbour, "edge_id"]] != (end_node, start_node)
+            }
+            if neighbours:
+                # Summed in value order, not row order: float addition is not associative, so
+                # reordering the input rows could otherwise flip a tie in the final ranking.
+                neighbour_mean = np.mean(sorted(percentile_by_index[n] for n in neighbours))
+                factors[index] = 1.0 + CONTINUITY_WEIGHT * neighbour_mean
+
+    return pd.Series(factors, index=df_gap_scores.index, name="continuity_factor")
+
+
 def detect_gaps_and_score_edges(
     gdf_edges: gpd.GeoDataFrame,
     df_volumes: pd.DataFrame,
     scenario: str | None = None,
-    continuity_factor: float = 1.0,
 ) -> pd.DataFrame:
     """Score the used road directions that have no dedicated bike lane (decision D3).
 
@@ -219,8 +291,6 @@ def detect_gaps_and_score_edges(
             ``edge_id``, ``volume``), one row per (scenario, edge_id).
         scenario: Score only this scenario. ``None`` (default) scores every
             scenario found in ``df_volumes``.
-        continuity_factor: Multiplier rewarding connected gaps. Fixed at 1.0
-            until its definition is agreed in week 4 (design doc section 7.1).
 
     Returns:
         pd.DataFrame validated by ``EdgeScoresSchema`` with columns
@@ -232,8 +302,9 @@ def detect_gaps_and_score_edges(
            the other keeps only the missing direction.
         2. Only edges with ``volume > 0`` are scored; unused edges are not gaps
            worth ranking.
-        3. ``score = volume * gap length (m) * continuity_factor``. The gap length
-           is the edge's ``length_m``: the whole edge lacks a lane in that direction.
+          3. ``score = volume * gap length (m) * continuity_factor``. The continuity
+              factor is computed from connected gap edges in the same scenario and is
+              bounded by 1.25. The gap length is the whole edge's ``length_m``.
         4. ``rank`` restarts at 1 in every scenario, highest score first. Ties are
            broken by higher volume, then by ``edge_id``, so ranks are unique
            and repeatable.
@@ -241,12 +312,9 @@ def detect_gaps_and_score_edges(
 
     Raises:
         ValueError: if required columns are missing or malformed, edge IDs are
-            duplicated, ``continuity_factor`` is negative, or ``df_volumes``
-            contains an edge that is not in ``gdf_edges`` (routes and edges
-            must come from the same frozen graph).
+            duplicated, or ``df_volumes`` contains an edge that is not in
+            ``gdf_edges`` (routes and edges must come from the same frozen graph).
     """
-    if continuity_factor < 0 or not np.isfinite(continuity_factor):
-        raise ValueError("continuity_factor must be a finite, non-negative number")
     _check_gap_edges(gdf_edges)
     volume = _check_gap_volumes(df_volumes)
 
@@ -281,8 +349,9 @@ def detect_gaps_and_score_edges(
     if work.empty:
         return EdgeScoresSchema.validate(_empty_edge_scores())
 
-    # Rule 3.
-    work["score"] = work["volume"] * work["length_m"] * float(continuity_factor)
+    work["base_score"] = work["volume"] * work["length_m"]
+    work["continuity_factor"] = calculate_continuity_factors(work)
+    work["score"] = work["base_score"] * work["continuity_factor"]
 
     # Rules 4 and 5.
     work = work.sort_values(

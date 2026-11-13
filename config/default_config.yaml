@@ -19,11 +19,13 @@ network:
   uphill_penalty_alpha: 3.0
 
 demand:
-  population_source: "worldpop_2026_100m"
+  population_source: "worldpop_2026_CN_100m_R2025A"
+  population_source_file: "hun_pop_2026_CN_100m_R2025A_v1.tif"
+  population_raster_file: "pop_2026_budapest_bbox.tif"
   population_threshold_per_cell: 100
   gravity_scaling_k: 0.05
   gravity_distance_decay: "exponential"  # or power_law
-  gravity_beta: 0.0015
+  gravity_beta: 0.0006666667
 
 stations:
   # Frozen Futár bicycle-rental snapshot behind data/processed/stations.parquet.

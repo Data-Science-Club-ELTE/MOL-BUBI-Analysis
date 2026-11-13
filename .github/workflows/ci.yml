@@ -35,6 +35,12 @@ jobs:
         run: |
           uv run python scripts/generate_fixtures.py
 
+      # Scoring and corridor ranking decide the demo order (#78): run them first, offline
+      # (the no_network fixture fails any download) and within a hard 60 s limit.
+      - name: Corridor scoring tests (offline, 60 s limit)
+        run: |
+          timeout 60 uv run pytest tests/test_corridors.py tests/test_corridor_volumes.py tests/test_corridors_ci.py -q
+
       - name: Run test suite
         run: |
           uv run pytest tests/ -v
