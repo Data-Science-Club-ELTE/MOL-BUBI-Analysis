@@ -7,6 +7,18 @@ helpers from their submodules:
 - ``from bubi.routing.report import unroutable_report``
 """
 
-from bubi.routing.router import build_graph, compute_edge_weight, route_station_pairs
+from bubi.routing.router import (
+    build_graph,
+    compute_edge_weight,
+    interpolate_bridge_grade,
+    route_station_pairs,
+    routes_from_matched_edges,
+)
 
-__all__ = ["build_graph", "compute_edge_weight", "route_station_pairs"]
+__all__ = [
+    "build_graph",
+    "compute_edge_weight",
+    "interpolate_bridge_grade",
+    "route_station_pairs",
+    "routes_from_matched_edges",
+]
