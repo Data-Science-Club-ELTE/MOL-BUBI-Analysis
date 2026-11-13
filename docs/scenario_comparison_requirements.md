@@ -84,25 +84,25 @@ that scenario's data.
 
 ---
 
-### R5: Corridors with changed rank layer (difference)
+### R5: Rank-change layer (difference)
 
 | Field | Value |
 |-------|-------|
-| **Description** | When the difference toggle is on, highlight corridors whose rank changed compared to `baseline`. Colour corridors that improved (lower rank number, meaning higher priority) in one colour (suggested: green) and corridors that worsened (higher rank number) in another (suggested: red). Corridors that are new (not in the baseline top-k) are marked as "new corridor". |
-| **Tables and columns** | `corridors`: `scenario`, `corridor_id`, `edge_ids`, `score`, `rank`. Join `baseline` rows to `lane_aware` or `population_only` rows on `corridor_id` to compute rank differences. `edges`: `edge_id`, `geometry` (to draw the corridor on the map). |
-| **Module** | Dashboard (`src/bubi/dashboard/app.py`) for the map layer. The rank-comparison logic can be computed in the dashboard or in `build_scenario_comparison_view` in `src/bubi/scenarios/runner.py`. |
-| **Status** | **Needs new code.** The corridor layer exists but does not compare ranks across scenarios. `build_scenario_comparison_view` in `src/bubi/scenarios/runner.py` is a stub (raises `NotImplementedError`). |
+| **Description** | When the difference toggle is on, highlight network edges whose rank changed compared to `baseline`. Compare scenarios at the edge level using `edge_scores` (`scenario`, `edge_id`, `rank`, `score`) by matching on `edge_id`. Do not join on `corridor_id` across scenarios: corridors are built separately per scenario, so the same road can get different `corridor_id`s; `edge_id` is the same in every scenario, so it avoids showing one road as two corridors. On the map, draw each edge using `edges.geometry` and colour it by how its rank changed versus baseline: edges that improved (lower rank number, meaning higher priority) use one colour (suggested: green), edges that worsened (higher rank number) use another (suggested: red), and edges that are new to the top-k in the active scenario are marked as new. |
+| **Tables and columns** | `edge_scores`: `scenario`, `edge_id`, `score`, `rank`. Match `baseline` rows to `lane_aware` or `population_only` rows on `edge_id` (not `corridor_id`) to compute rank differences. `edges`: `edge_id`, `geometry` (to draw each edge on the map). |
+| **Module** | Dashboard (`src/bubi/dashboard/app.py`) for the map layer. Edge rank comparisons are computed from `edge_scores` or `build_scenario_comparison_view` in `src/bubi/scenarios/runner.py`. |
+| **Status** | **Needs new code.** The dashboard edge and corridor layers exist but do not yet display rank differences across scenarios. `build_scenario_comparison_view` in `src/bubi/scenarios/runner.py` computes per-scenario edge ranks; dashboard rendering needs to be wired up. |
 
 ---
 
-### R6: Robust vs station-dependent corridor labels
+### R6: Robust vs station-dependent labels
 
 | Field | Value |
 |-------|-------|
-| **Description** | Each corridor in the top-k (k = 10) is labelled as either "robust" or "station-dependent". A corridor is robust if it appears in the top-10 in all three scenarios (`baseline`, `lane_aware`, `population_only`). A corridor is station-dependent if it appears in the top-10 of at least one scenario but not all three (design doc section 7.3, metric M13 in `docs/evaluation_metrics.md`). The label is shown in the corridor tooltip on the map, in the detail panel (wireframe Area 7), and in the corridors table (wireframe Area 9). |
-| **Tables and columns** | `corridors`: `scenario`, `corridor_id`, `rank`. For each corridor, check whether `rank` is between 1 and 10 (inclusive) in all three scenarios. Alternatively, `edge_scores`: `scenario`, `edge_id`, `rank` can be used for edge-level classification. |
-| **Module** | Scenarios (`src/bubi/scenarios/runner.py`, function `build_scenario_comparison_view`). Dashboard (`src/bubi/dashboard/app.py`) displays the label. |
-| **Status** | **Needs new code.** `build_scenario_comparison_view` in `src/bubi/scenarios/runner.py` is a stub. It should accept `df_edge_scores`, `df_corridors`, and `top_k` (default 10) and return a DataFrame with corridor IDs, their scenario membership, and the robust/station-dependent classification. |
+| **Description** | Classify network elements at the edge level first. An edge is robust if it appears in the top-k (k = 10, per `docs/evaluation_metrics.md` section 5) in all three scenarios (`baseline`, `lane_aware`, `population_only`). An edge is station-dependent if it is in the top-k of at least one scenario but not all three. Corridors are built separately per scenario, so the same road can get different `corridor_id`s; `edge_id` is the same in every scenario, so it avoids showing one road as two corridors.<br><br>**Note for reviewer (corridor label from edges):** In `build_scenario_comparison_view` (`src/bubi/scenarios/runner.py`), corridors are matched across scenarios into groups whenever they share at least one directed edge (`edge_id`). Chains of shared edges form a single corridor group. For each scenario, the group evaluates the best rank of any corridor of that scenario covering any of the group's edges. A corridor group is labelled robust if it reaches the top-k (rank &le; k) in all three scenarios (`baseline`, `lane_aware`, `population_only`), and station-dependent if it is in the top-k of fewer than three scenarios. Individual edges in the view retain their own edge-level robustness labels. Labels are displayed in the map tooltips, the detail panel (wireframe Area 7), and the recommendations table (wireframe Area 9). |
+| **Tables and columns** | `edge_scores`: `scenario`, `edge_id`, `rank`, `score`. `corridors`: `scenario`, `corridor_id`, `edge_ids`, `rank`, `score`. `edges`: `edge_id`, `geometry`. Compare by matching `edge_id` across scenarios. Do not join on `corridor_id` across scenarios. |
+| **Module** | Scenarios (`src/bubi/scenarios/runner.py`, function `build_scenario_comparison_view`). Dashboard (`src/bubi/dashboard/app.py`) displays the labels. |
+| **Status** | **Available in scenario module; needs dashboard wiring.** `build_scenario_comparison_view` in `src/bubi/scenarios/runner.py` is implemented and classifies both edge rows and corridor groups across scenarios. The dashboard needs to consume this view and display the labels on map layers and tables. |
 
 ---
 
@@ -143,10 +143,10 @@ that scenario's data.
 
 | Field | Value |
 |-------|-------|
-| **Description** | Display the pairwise Jaccard overlap between the edge sets of the top-k corridors across scenarios. This is a number between 0 and 1 showing how much the top corridors agree. Show in the scenario comparison area. |
-| **Tables and columns** | `corridors`: `scenario`, `corridor_id`, `edge_ids`, `rank`. Or equivalently, `edge_scores`: `scenario`, `edge_id`, `rank`. For each scenario, collect the set of `edge_id` values where `rank` is between 1 and k. Compute the Jaccard similarity (intersection size divided by union size). |
-| **Module** | Scenarios (`src/bubi/scenarios/runner.py`, inside `build_scenario_comparison_view`). Dashboard displays the result. |
-| **Status** | **Needs new code.** `build_scenario_comparison_view` is a stub. The Jaccard calculation is straightforward once the function is implemented. |
+| **Description** | Display the pairwise Jaccard overlap between the top-k directed edge sets across scenarios (M14 in `docs/evaluation_metrics.md`). This is a number between 0 and 1 showing how much the top recommendations agree. Compare scenarios at the edge level using edge sets extracted from top-k `edge_scores` or unique `edge_ids` of top-k corridors; do not join on `corridor_id` across scenarios. Show in the scenario comparison area. |
+| **Tables and columns** | `edge_scores`: `scenario`, `edge_id`, `rank`. Or `corridors`: `scenario`, `corridor_id`, `edge_ids`, `rank`. For each scenario, collect the set of `edge_id` values where `rank` is between 1 and k. Compute the Jaccard similarity (intersection size divided by union size). |
+| **Module** | Scenarios (`src/bubi/scenarios/runner.py`, or calculated in dashboard). Dashboard displays the result. |
+| **Status** | **Available in scenario module; needs dashboard wiring.** `build_scenario_comparison_view` in `src/bubi/scenarios/runner.py` provides edge-level scenario presence and ranks. Calculating pairwise Jaccard overlap across the three scenarios and displaying it in the comparison area needs dashboard wiring. |
 
 ---
 
@@ -165,8 +165,8 @@ that scenario's data.
 
 | Field | Value |
 |-------|-------|
-| **Description** | The scenario comparison area (wireframe Area 8) shows a table with one row per scenario. Columns include: scenario name, proposed station count, corridor count, synthetic trips (absolute), newly served population (M1, absolute), population per km of corridor (M6), demand per newly served person (M11), and robust corridor share (M13). For `baseline`, M1 is 0 and M6, M11 and M13 are not applicable (show a dash). |
-| **Tables and columns** | `station_candidates`: `scenario`, `rank` (count non-null ranks). `corridors`: `scenario`, `corridor_id`, `rank`. `routes`: `scenario`, `trip_count`. `population`, `stations`, `station_candidates` (for M1). `edges`: `edge_id`, `length_m` (for M6). |
+| **Description** | The scenario comparison area (wireframe Area 8) shows a table with one row per scenario. Columns include: scenario name, proposed station count, corridor count, synthetic trips (absolute), newly served population (M1, absolute), population per km of corridor (M6), demand per newly served person (M11), and robust corridor share (M13). For `baseline`, M1 is 0 and M6, M11 and M13 are not applicable (show a dash). Robust corridor share (M13) is evaluated across scenarios at the edge level using the share of top-k edges present in all three scenarios per `docs/evaluation_metrics.md` section 2, without joining on `corridor_id`. |
+| **Tables and columns** | `station_candidates`: `scenario`, `rank` (count non-null ranks). `corridors`: `scenario`, `corridor_id`, `rank`. `routes`: `scenario`, `trip_count`. `population`, `stations`, `station_candidates` (for M1). `edges`: `edge_id`, `length_m` (for M6). `edge_scores`: `scenario`, `edge_id`, `rank` (for M13 edge-level robustness). |
 | **Module** | Dashboard (`src/bubi/dashboard/app.py`, function `render_scenario_comparison`). |
 | **Status** | **Needs new code.** The current comparison table shows proposed stations, corridors and synthetic trips. Adding M1, M6, M11 and M13 requires implementing the metric calculations (see R7, R8, R9, R10) and adding columns to the table in `render_scenario_comparison`. |
 
@@ -176,10 +176,10 @@ that scenario's data.
 
 | Field | Value |
 |-------|-------|
-| **Description** | The three small maps in the scenario comparison area (wireframe Area 8) should reflect the difference toggle (R2). When it is on, the `lane_aware` and `population_only` maps colour corridors by their robustness label (R6): one colour for robust (suggested: solid blue), another for station-dependent (suggested: dashed orange). The `baseline` map shows corridors in their default colour. |
-| **Tables and columns** | `corridors`: `scenario`, `corridor_id`, `edge_ids`, `rank`. The robustness classification from `build_scenario_comparison_view`. `edges`: `edge_id`, `geometry`. |
+| **Description** | The three small maps in the scenario comparison area (wireframe Area 8) should reflect the difference toggle (R2). When it is on, the `lane_aware` and `population_only` maps colour network segments by their robustness label (R6): one colour for robust (suggested: solid blue), another for station-dependent (suggested: dashed orange). Robustness is classified at the edge level first, with geometries drawn using `edges.geometry` mapped by `edge_id` (or corridors coloured by their aggregated edge robustness; do not join on `corridor_id` across scenarios). The `baseline` map shows corridors in their default colour. |
+| **Tables and columns** | `edge_scores`: `scenario`, `edge_id`, `rank`. `corridors`: `scenario`, `corridor_id`, `edge_ids`, `rank`. `edges`: `edge_id`, `geometry`. The robustness classification from `build_scenario_comparison_view`. |
 | **Module** | Dashboard (`src/bubi/dashboard/app.py`, function `render_scenario_comparison`). |
-| **Status** | **Needs new code.** The three small maps are drawn but do not distinguish robust from station-dependent corridors. Requires the output of `build_scenario_comparison_view` (R6). |
+| **Status** | **Needs new code.** The three small maps are drawn but do not distinguish robust from station-dependent segments. Requires consuming the output of `build_scenario_comparison_view` (R6). |
 
 ---
 
@@ -187,8 +187,8 @@ that scenario's data.
 
 | Field | Value |
 |-------|-------|
-| **Description** | When a user clicks a corridor on the main map, the detail panel under the map (wireframe Area 7) shows: corridor ID, rank, score, the edges in the corridor, the scenario, and the robustness label (robust or station-dependent). If the score breakdown is available (volume, gap length, continuity factor), show those too. |
-| **Tables and columns** | `corridors`: `scenario`, `corridor_id`, `edge_ids`, `score`, `rank`. `edge_scores`: `scenario`, `edge_id`, `volume`, `score`, `rank`. The robustness classification from `build_scenario_comparison_view`. |
+| **Description** | When a user clicks a corridor on the main map, the detail panel under the map (wireframe Area 7) shows: corridor ID, rank, score, the edges in the corridor, the scenario, and the robustness label (robust or station-dependent, determined from edge-level classifications per R6 without joining on `corridor_id` across scenarios). If the score breakdown is available (volume, gap length, continuity factor), show those too. |
+| **Tables and columns** | `corridors`: `scenario`, `corridor_id`, `edge_ids`, `score`, `rank`. `edge_scores`: `scenario`, `edge_id`, `volume`, `score`, `rank`. `edges`: `edge_id`, `length_m`. The robustness classification from `build_scenario_comparison_view`. |
 | **Module** | Dashboard (`src/bubi/dashboard/app.py`, function `render_detail_panel`). |
 | **Status** | **Needs new code.** The detail panel currently shows only the clicked tooltip text. The full score breakdown and robustness label are planned for Week 4 (score breakdown) and Week 5 (robustness label). |
 
@@ -200,8 +200,8 @@ The following diagram shows which requirements depend on which code:
 
 ```
 build_scenario_comparison_view (src/bubi/scenarios/runner.py)
-  -- currently raises NotImplementedError --
-  Produces: robustness classification, Jaccard overlap
+  -- implemented; evaluates at edge level and groups corridors by shared edge_ids --
+  Produces: edge-level and corridor robustness classification, per-scenario ranks
   Required by: R5, R6, R10, R13, R14
 
 Newly served population calculation (new function, location TBD)
@@ -210,10 +210,10 @@ Newly served population calculation (new function, location TBD)
 
 Dashboard wiring (src/bubi/dashboard/app.py)
   Enable difference toggle: R2
-  Add difference layers: R3, R4, R5
-  Add metrics to comparison table: R12
+  Add difference layers: R3, R4, R5 (R5 joins edge_scores on edge_id, drawn with edges.geometry)
+  Add metrics to comparison table: R12 (M13 uses top-k edge_id overlap)
   Add robustness colouring to small maps: R13
-  Add score breakdown and label to detail panel: R14
+  Add score breakdown and robustness label to detail panel: R14
 ```
 
 ---
@@ -226,25 +226,26 @@ Use this checklist to track progress. Each item maps to a requirement above.
 - [ ] R2: Enable the "Show difference vs baseline" checkbox
 - [ ] R3: Colour proposed stations distinctly in difference mode
 - [ ] R4: Shade newly served H3 cells in difference mode
-- [ ] R5: Colour corridors by rank change in difference mode
-- [ ] R6: Show robust / station-dependent label on corridors (needs `build_scenario_comparison_view` from Data Science)
+- [ ] R5: Colour edges by rank change in difference mode (match on edge_id, draw with edges.geometry)
+- [ ] R6: Show robust / station-dependent labels on edges and corridors (classified at edge level via edge_scores / build_scenario_comparison_view)
 - [ ] R7: Show newly served population (M1) in the metrics bar
 - [ ] R8: Show population per km of corridor (M6) in the metrics bar
 - [ ] R9: Show demand per newly served person (M11) in the comparison table
-- [ ] R10: Show top-k corridor overlap (M14) in the comparison area (needs `build_scenario_comparison_view`)
+- [ ] R10: Show top-k corridor/edge overlap (M14) in the comparison area (using top-k edge sets)
 - [ ] R11: Confirm D5 badge is visible on all views (already done)
-- [ ] R12: Add M1, M6, M11, M13 columns to the scenario comparison table
-- [ ] R13: Colour corridors in the small maps by robustness (needs `build_scenario_comparison_view`)
-- [ ] R14: Show full score breakdown and robustness label in the detail panel
+- [ ] R12: Add M1, M6, M11, M13 columns to the scenario comparison table (M13 computed on edge sets)
+- [ ] R13: Colour edges and corridors in the small maps by robustness (using edge-level classification)
+- [ ] R14: Show full score breakdown and edge/corridor robustness labels in the detail panel
 
 ---
 
 ## 5. Checklist for Data Science (scenario comparison owner)
 
-- [ ] Implement `build_scenario_comparison_view` in `src/bubi/scenarios/runner.py`
+- [x] Implement `build_scenario_comparison_view` in `src/bubi/scenarios/runner.py` (implemented; compares at edge level and groups corridors by shared edge_ids)
+- [ ] Confirm corridor-level robustness rule (grouping corridors by shared edge_ids per build_scenario_comparison_view) with reviewer (oguzzkd)
 - [ ] Implement `run_all_scenarios` in `src/bubi/scenarios/runner.py`
 - [ ] Implement newly served population calculation (M1)
-- [ ] Provide the robustness classification and Jaccard overlap to the dashboard
+- [ ] Provide the edge-level robustness classification and Jaccard overlap to the dashboard
 
 ---
 
