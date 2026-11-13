@@ -43,7 +43,7 @@ Not implemented yet on `develop`:
   - `src/bubi/network/graph.py`: `build_street_graph` and `extract_directed_edges` (OSM network download and per-direction edge extraction)
   - `src/bubi/population/grid.py`: `raster_to_h3` (population raster aggregation to H3 cells)
   - `src/bubi/ingestion/observed_routes.py`: `map_match_trace` (GPS trace map-matching)
-  - `src/bubi/scenarios/runner.py`: `run_all_scenarios` and `build_scenario_comparison_view` (scenario runner and comparison view)
+  - `src/bubi/scenarios/runner.py`: `run_all_scenarios` (scenario runner)
   - `src/bubi/profiling/profiler.py`: `generate_traceability_report` (traceability report generator)
 - Deliverables still pending:
   - final technical report and methodology appendix (D5, D6)

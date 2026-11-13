@@ -355,7 +355,7 @@ Population is the gridded people count summed over the cell. Lane connectivity i
 - Corridors are compared at edge level (scores and ranks) and then aggregated. Each corridor is labelled by the scenarios in which it ranks among the top corridors (cut-off defined in the appendix): robust if it appears in all three, station-dependent otherwise.
 - Output is a scenario comparison, not a forecast.
 
-The runner (`run_all_scenarios`) and the comparison view (`build_scenario_comparison_view`) are stubs. Siting for both strategies exists; orchestration, parity enforcement, and robustness classification do not.
+The runner (`run_all_scenarios`) is a stub, so nothing yet runs the three scenarios end to end. Siting for both strategies exists. Two pieces of the comparison are implemented and tested on fixtures: `check_scenarios_comparable` fails when the seed, N, spacing, walk distance or beta differ between runs, and `build_scenario_comparison_view` labels corridors and edges robust or station-dependent (top-k default 10, per `docs/evaluation_metrics.md` §5). The view has not been run on real scores, which wait for the processed edges and routes.
 
 ---
 
@@ -419,7 +419,7 @@ uv run pytest tests/ -v
 
 It installs Python 3.12 with `astral-sh/setup-uv` and installs the project in editable mode. Note that CI regenerates fixtures but does not fail on a diff against the committed fixture files; regeneration is a smoke test, not a byte-for-byte check.
 
-Test coverage today: contract validation, gravity-model properties, edge-volume counting rules, continuity and corridor scoring, station filtering/connectivity/selection, Futár snapshot inspection and writing, and processed-station selection. Missing coverage: OSM network build, population raster aggregation, route search, scenario orchestration, dashboard behaviour, and traceability reporting.
+Test coverage today: contract validation, gravity-model properties, edge-volume counting rules, continuity and corridor scoring, station filtering/connectivity/selection, scenario comparison labels and the comparability check, Futár snapshot inspection and writing, and processed-station selection. Missing coverage: OSM network build, population raster aggregation, route search, scenario orchestration, dashboard behaviour, and traceability reporting.
 
 ---
 

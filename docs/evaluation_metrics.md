@@ -115,7 +115,8 @@ Notation used in formulas:
 - **Scenarios:** Evaluates all three scenarios simultaneously (`baseline`, `lane_aware`, `population_only`).
 - **Status:**
   - Jaccard overlap and set intersections: **Available now** (computed directly from `corridors.edge_ids` or `edge_scores.edge_id`).
-  - Classification view: **Needs new table / view** — `src/bubi/scenarios/runner.py` specifies `build_scenario_comparison_view(df_edge_scores, df_corridors, top_k)`, which is currently a stub raising `NotImplementedError`. It should return a comparison table with corridor IDs, scenario membership, and the `robust` vs `station_dependent` classification.
+  - Classification view: **Implemented** in `src/bubi/scenarios/runner.py` as `build_scenario_comparison_view(df_edge_scores, df_corridors, top_k=10, scenario_params=None)`. It returns one table with corridor rows and edge rows, the scenarios in which each item is in the top k, its best rank per scenario, and the `robust` or `station_dependent` label. An item in the top k of exactly two scenarios is `station_dependent`; its `scenarios_top_k` column names which two. Corridor IDs restart in every scenario, so top-k corridors of different scenarios are matched when they share a directed edge. Run on the committed fixtures only; a run on real scores waits for the processed edges and routes.
+  - Comparability check: `check_scenarios_comparable` raises `ScenarioComparabilityError` when the random seed, N, minimum spacing, walk coverage distance or gravity beta differ between the three runs.
 
 ---
 
@@ -212,5 +213,5 @@ To confirm that results are not sensitive to an arbitrary choice of $k$, the pip
 | **Demand per newly served person (M11)** | Yes | None (trip difference from `routes.trip_count` / M1; undefined for baseline) | `src/bubi/scenarios/` |
 | **Unroutable / dropped trips (M12)** | Yes | None (emitted in `routing_report` dict from `route_station_pairs`) | `src/bubi/routing/` |
 | **Top-k corridor overlap across scenarios (M14)** | Yes | None (Jaccard similarity on top-k `edge_ids`) | `src/bubi/scenarios/` |
-| **Robust corridor classification (M13)** | Needs new view | Derived comparison view table classifying corridors as robust (in all 3 scenarios) vs station-dependent (otherwise) | `src/bubi/scenarios/runner.py` (`build_scenario_comparison_view`) |
+| **Robust corridor classification (M13)** | Yes | None (implemented as `build_scenario_comparison_view`; robust = in all 3 scenarios, station-dependent otherwise) | `src/bubi/scenarios/runner.py` |
 | **Top-k overlap across seeds** | N/A today | None needed today; deterministic model (D16). Seed testing applies only if sampling is added | `src/bubi/demand/` |
