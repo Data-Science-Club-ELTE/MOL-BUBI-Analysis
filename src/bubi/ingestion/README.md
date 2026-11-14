@@ -130,7 +130,7 @@ Rules:
 - **Timestamps:** values with an offset (`+02:00`, `Z`) are used as given. Values without one are read as Europe/Budapest local time. All times are stored in UTC. Europe/Budapest is used again only for the local-hour bin (`start_hour_local`, and `trips_by_local_hour` in the report).
 - **Invalid times:** a trip is dropped if a timestamp cannot be parsed, falls in a daylight-saving switch (ambiguous or nonexistent local time), or the trip ends before it starts. GPS points with such timestamps are dropped too.
 - **Stations:** a trip is dropped if its start or end station ID is not in the Futár station list. The report lists the count, trip IDs and unknown station IDs.
-- **Map-matching:** each trip's GPS points, sorted by UTC time, are turned into an ordered list of `edge_id`s by `map_match_trace`. This is a **placeholder** that raises `NotImplementedError`; CS 2 implements it following the geoinformatics member's plan. Trips without GPS points, or whose trace matches no edges, are dropped and counted.
+- **Map-matching:** each trip's GPS points, sorted by UTC time, are turned into an ordered list of `edge_id`s by `map_match_trace`. This is a **placeholder** that raises `NotImplementedError`; CS 2 implements it following `docs/map_matching_plan.md`. Trips without GPS points, or whose trace matches no edges, are dropped and counted.
 - **Merging:** routes with the same scenario, station pair, route type and edge list are merged by summing `trip_count`. `edges` is stored as a Python list.
 
 ```python
@@ -160,7 +160,7 @@ Questions to settle against the real data:
 
 ### 8.1 Contract with the map-matcher
 
-`convert_observed_routes` takes the matcher as its `matcher` argument, so CS 2's implementation can replace the placeholder `map_match_trace` without changing the converter. The matcher is called once per trip that passed the time and station checks.
+`convert_observed_routes` takes the matcher as its `matcher` argument, so CS 2's implementation can replace the placeholder `map_match_trace` without changing the converter. The method, failure reasons and handoff contract are in `docs/map_matching_plan.md`. The matcher is called once per trip that passed the time and station checks.
 
 | Side | Rule |
 |---|---|

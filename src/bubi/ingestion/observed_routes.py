@@ -55,7 +55,7 @@ class ConversionError(ValueError):
 def map_match_trace(points: pd.DataFrame) -> list[str]:
     """PLACEHOLDER: map-match one GPS trace to an ordered list of directed ``edge_id`` s.
 
-    To be completed by CS 2 following the geoinformatics member's map-matching plan.
+    To be completed by CS 2 following the map-matching plan in ``docs/map_matching_plan.md``.
     Contract with the converter (``src/bubi/ingestion/README.md`` section 8.1):
 
     - ``points`` holds one trip's valid GPS points, sorted by ``timestamp_utc``, with
