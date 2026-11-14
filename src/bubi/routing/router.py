@@ -237,66 +237,6 @@ def route_station_pairs(
     return df_routes, routing_report
 
 
-def routes_from_matched_edges(
-    matched: list[dict[str, Any]],
-    scenario: str = "baseline",
-    route_type: str = "observed",
-) -> pd.DataFrame:
-    """Build a ``routes`` DataFrame from pre-matched edge lists.
-
-    This is the entry point for map-matched GPS data: the ingestion converter
-    (``bubi.ingestion.observed_routes``) calls the map-matcher for each trip and
-    collects the results as dicts.  This function turns them into a DataFrame that
-    conforms to ``RoutesSchema``.
-
-    Each element of *matched* must have at least:
-
-    - ``start_station_id`` (str)
-    - ``end_station_id`` (str)
-    - ``edges`` (list[str]): directed edge_ids in travel order
-    - ``trip_count`` (float, optional, default 1.0)
-
-    Identical routes (same scenario, station pair, route type and edge list) are
-    merged by summing ``trip_count``.
-
-    Args:
-        matched: One dict per successfully matched trip.
-        scenario: Value for the ``scenario`` column (default ``"baseline"``).
-        route_type: Value for the ``route_type`` column (default ``"observed"``).
-
-    Returns:
-        pd.DataFrame conforming to ``RoutesSchema``.
-    """
-    if not matched:
-        return _empty_routes()
-
-    rows: list[dict[str, Any]] = []
-    for item in matched:
-        edge_list = item["edges"]
-        if isinstance(edge_list, list):
-            edges_str = ",".join(str(e) for e in edge_list)
-        else:
-            edges_str = str(edge_list)
-        rows.append(
-            {
-                "scenario": scenario,
-                "start_station_id": str(item["start_station_id"]),
-                "end_station_id": str(item["end_station_id"]),
-                "route_type": route_type,
-                "edges": edges_str,
-                "trip_count": float(item.get("trip_count", 1.0)),
-            }
-        )
-
-    df = pd.DataFrame(rows)
-    group_cols = ["scenario", "start_station_id", "end_station_id", "route_type", "edges"]
-    return (
-        df.groupby(group_cols, as_index=False, sort=False)["trip_count"]
-        .sum()
-        .reset_index(drop=True)
-    )
-
-
 def _empty_routes() -> pd.DataFrame:
     """Return an empty DataFrame with the RoutesSchema columns."""
     return pd.DataFrame(

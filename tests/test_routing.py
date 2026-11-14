@@ -2,14 +2,15 @@
 
 import networkx as nx
 import pandas as pd
+import pytest
 
+from bubi.routing.map_matching import CorridorMatcher, make_corridor_matcher
 from bubi.routing.report import NO_PATH, STATION_TOO_FAR, STATION_UNKNOWN, unroutable_report
 from bubi.routing.router import (
     build_graph,
     compute_edge_weight,
     interpolate_bridge_grade,
     route_station_pairs,
-    routes_from_matched_edges,
 )
 from bubi.routing.snapping import snap_stations
 
@@ -650,83 +651,93 @@ def test_station_outside_the_graph():
     assert df_routes.iloc[0]["end_station_id"] == "B"
 
 
-# --- routes_from_matched_edges (task.md criterion 5) ----------------------------------------
+# --- map-matching seam: CorridorMatcher & make_corridor_matcher (task.md criterion 5 & PR #70 §5)
 
 
-def test_routes_from_matched_edges_basic():
-    """Basic conversion of matched GPS edges into routes rows."""
-    matched = [
+def test_make_corridor_matcher_initialization(sample_edges):
+    """make_corridor_matcher creates a CorridorMatcher with correct attributes and defaults."""
+    bbox = (18.92, 47.35, 19.33, 47.61)
+    matcher = make_corridor_matcher(sample_edges, bbox)
+
+    assert isinstance(matcher, CorridorMatcher)
+    assert matcher.edges is sample_edges
+    assert matcher.study_area_bbox == bbox
+    assert matcher.buffer_m == 50.0
+    assert matcher.max_gap_m == 250.0
+    assert len(matcher.drops) == 0
+    assert matcher.suspect == []
+
+
+def test_corridor_matcher_custom_parameters(sample_edges):
+    """Custom buffer_m and max_gap_m are passed to CorridorMatcher."""
+    bbox = (18.92, 47.35, 19.33, 47.61)
+    matcher = make_corridor_matcher(sample_edges, bbox, buffer_m=75.0, max_gap_m=300.0)
+
+    assert matcher.buffer_m == 75.0
+    assert matcher.max_gap_m == 300.0
+
+
+def test_corridor_matcher_call_raises_not_implemented(sample_edges):
+    """CorridorMatcher.__call__ documents that algorithm implementation follows in follow-up issue."""
+    bbox = (18.92, 47.35, 19.33, 47.61)
+    matcher = make_corridor_matcher(sample_edges, bbox)
+
+    points = pd.DataFrame(
         {
-            "start_station_id": "futar_001",
-            "end_station_id": "futar_002",
-            "edges": ["n1-n2-0"],
-            "trip_count": 1.0,
-        },
-        {
-            "start_station_id": "futar_002",
-            "end_station_id": "futar_003",
-            "edges": ["n2-n1-0", "n1-n3-0"],
-            "trip_count": 1.0,
-        },
-    ]
+            "trip_id": ["t01"],
+            "timestamp": ["2026-10-18T10:00:00Z"],
+            "lat": [47.4979],
+            "lon": [19.0541],
+            "timestamp_utc": [pd.Timestamp("2026-10-18 10:00:00", tz="UTC")],
+        }
+    )
 
-    df = routes_from_matched_edges(matched)
-
-    assert len(df) == 2
-    assert set(df["route_type"]) == {"observed"}
-    assert set(df["scenario"]) == {"baseline"}
-    row_12 = df[df["end_station_id"] == "futar_002"].iloc[0]
-    assert row_12["edges"] == "n1-n2-0"
+    with pytest.raises(NotImplementedError, match="CorridorMatcher algorithm"):
+        matcher(points)
 
 
-def test_routes_from_matched_edges_merges_duplicates():
-    """Identical routes are merged by summing trip_count."""
-    matched = [
-        {"start_station_id": "A", "end_station_id": "B", "edges": ["n1-n2-0"]},
-        {"start_station_id": "A", "end_station_id": "B", "edges": ["n1-n2-0"]},
-        {"start_station_id": "A", "end_station_id": "B", "edges": ["n1-n2-0"], "trip_count": 3.0},
-    ]
-
-    df = routes_from_matched_edges(matched)
-
-    assert len(df) == 1
-    assert df.iloc[0]["trip_count"] == 5.0  # 1.0 + 1.0 + 3.0
-
-
-def test_routes_from_matched_edges_empty():
-    """An empty list produces an empty DataFrame with the right columns."""
-    df = routes_from_matched_edges([])
-
-    assert len(df) == 0
-    assert list(df.columns) == [
-        "scenario",
-        "start_station_id",
-        "end_station_id",
-        "route_type",
-        "edges",
-        "trip_count",
-    ]
-
-
-def test_routes_from_matched_edges_validates():
-    """Output passes RoutesSchema validation."""
+def test_corridor_matcher_seam_wires_into_convert_observed_routes(sample_edges, sample_stations):
+    """Seam check: a CorridorMatcher subclass stands in for CS 2's matcher with convert_observed_routes."""
     from bubi.contracts.schemas import RoutesSchema
+    from bubi.ingestion.observed_routes import convert_observed_routes
 
-    matched = [
-        {"start_station_id": "A", "end_station_id": "B", "edges": ["n1-n2-0"]},
-    ]
+    bbox = (18.92, 47.35, 19.33, 47.61)
 
-    df = routes_from_matched_edges(matched)
-    RoutesSchema.validate(df)
+    class MockCorridorMatcher(CorridorMatcher):
+        def __call__(self, points: pd.DataFrame) -> list[str]:
+            # Mock match returning a known edge for t01, unmatchable for others
+            trip_id = points["trip_id"].iloc[0]
+            if trip_id == "t01":
+                return ["n1-n2-0"]
+            self.drops["gap"] += 1
+            return []
 
+    matcher = MockCorridorMatcher(sample_edges, bbox)
+    trips = pd.DataFrame(
+        [
+            ("t01", "futar_001", "futar_002", "2026-10-18T10:00:00Z", "2026-10-18T10:15:00Z"),
+            ("t02", "futar_002", "futar_003", "2026-10-18T11:00:00Z", "2026-10-18T11:20:00Z"),
+        ],
+        columns=["trip_id", "start_station_id", "end_station_id", "start_time", "end_time"],
+    )
+    gps = pd.DataFrame(
+        [
+            ("t01", "2026-10-18T10:00:00Z", 47.4979, 19.0541),
+            ("t01", "2026-10-18T10:15:00Z", 47.4893, 19.0617),
+            ("t02", "2026-10-18T11:00:00Z", 47.4893, 19.0617),
+            ("t02", "2026-10-18T11:20:00Z", 47.5058, 19.0632),
+        ],
+        columns=["trip_id", "timestamp", "lat", "lon"],
+    )
 
-def test_routes_from_matched_edges_custom_scenario_and_type():
-    """Scenario and route_type can be overridden."""
-    matched = [
-        {"start_station_id": "A", "end_station_id": "B", "edges": ["e1"]},
-    ]
+    routes, report = convert_observed_routes(
+        trips, gps, sample_stations, matcher=matcher, edges=sample_edges
+    )
 
-    df = routes_from_matched_edges(matched, scenario="lane_aware", route_type="synthetic")
-
-    assert df.iloc[0]["scenario"] == "lane_aware"
-    assert df.iloc[0]["route_type"] == "synthetic"
+    RoutesSchema.validate(routes)
+    assert len(routes) == 1
+    assert routes.iloc[0]["edges"] == ["n1-n2-0"]
+    assert routes.iloc[0]["route_type"] == "observed"
+    assert report["converted_trips"] == 1
+    assert report["unmatched_trace"] == 1
+    assert matcher.drops["gap"] == 1

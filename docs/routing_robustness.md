@@ -1,6 +1,6 @@
 # Routing Robustness and Map-Matching Integration
 
-**Module:** `src/bubi/routing/router.py` · **Tests:** `tests/test_routing.py` · **Contract:** `RoutesSchema`
+**Module:** `src/bubi/routing` · **Tests:** `tests/test_routing.py` · **Contract:** `RoutesSchema`
 
 ## 1. Purpose
 
@@ -10,7 +10,7 @@ The synthetic route engine computes slope-penalized shortest paths across Budape
 2. **False elevation slopes:** DEM rasters sample terrain or water surfaces rather than elevated structures. Bridges over the Danube or tunnels beneath Gellért Hill register artificial vertical drops or steep climbs.
 3. **Parallel edge ambiguity:** Multiple roadway segments connecting the same pair of nodes (e.g., dual carriageways or segregated cycleways) can produce non-deterministic route selections if ties are not handled explicitly.
 4. **Degenerate trip inputs:** Single-station networks, zero-trip demand matrices, or stations placed outside graph boundaries must not crash the pipeline.
-5. **Observed route ingestion seam:** A clean interface is required to turn map-matched Global Positioning System (GPS) traces into `RoutesSchema` rows without altering synthetic routing logic.
+5. **Observed route ingestion seam:** A clean interface is required to connect map-matched Global Positioning System (GPS) traces into the ingestion converter without duplicating route-building logic or altering the synthetic router.
 
 This document describes how `src/bubi/routing` addresses each of these robustness requirements.
 
@@ -55,35 +55,37 @@ The router gracefully handles edge cases:
 
 ---
 
-## 3. Map-Matching Seam: `routes_from_matched_edges`
+## 3. Map-Matching Seam: `make_corridor_matcher`
 
-The ingestion pipeline converts real trip records and GPS coordinates into observed routes (`route_type = "observed"`). To allow map-matching implementations to plug directly into the routes contract without modifying the synthetic routing engine, `bubi.routing` exposes:
+The ingestion pipeline converts real trip records and GPS coordinates into observed routes (`route_type = "observed"`) via `bubi.ingestion.observed_routes.convert_observed_routes()`.
+
+To prevent code duplication and maintain a single source of truth for observed routes, the routing module does not build redundant `routes` rows directly. Instead, per the agreed handoff contract (`docs/map_matching_plan.md` §5), routing exposes the matcher callable:
 
 ```python
-def routes_from_matched_edges(
-    matched: list[dict[str, Any]],
-    scenario: str = "baseline",
-    route_type: str = "observed",
-) -> pd.DataFrame:
+from bubi.ingestion.observed_routes import convert_observed_routes
+from bubi.routing import CorridorMatcher, make_corridor_matcher
+
+# 1. Instantiate the matcher with the frozen street graph and bounding box
+matcher = make_corridor_matcher(
+    edges=edges,
+    study_area_bbox=config["spatial"]["study_area_bbox"],
+    buffer_m=50.0,
+    max_gap_m=250.0,
+)
+
+# 2. Ingestion converter runs the matcher and builds observed routes rows
+routes, report = convert_observed_routes(trips, gps, stations, matcher=matcher, edges=edges)
+report["match_drops"] = dict(matcher.drops)
+report["suspect_length_ratio"] = len(matcher.suspect)
 ```
 
-### Input Specification
+### Seam Specification
 
-The function accepts a list of dictionaries, one per matched trip:
-
-| Key | Type | Description |
-|---|---|---|
-| `start_station_id` | `str` | Origin Futár station identifier |
-| `end_station_id` | `str` | Destination Futár station identifier |
-| `edges` | `list[str]` or `str` | Ordered list of directed `edge_id`s (`u-v-key`) traversed |
-| `trip_count` | `float` (optional) | Number of trips represented (default: `1.0`) |
-
-### Output
-
-Returns a `pandas.DataFrame` conforming strictly to `RoutesSchema`:
-- Groups identical routes sharing `(scenario, start_station_id, end_station_id, route_type, edges)` and sums their `trip_count`.
-- Serializes `edges` into comma-delimited strings for downstream parquet serialization.
-- Validates against `RoutesSchema` with `strict=True`.
+- **Module:** `src/bubi/routing/map_matching.py`
+- **Class:** `CorridorMatcher`
+  - Attributes: `drops` (`Counter[str]`), `suspect` (`list[str]`), `edges`, `study_area_bbox`, `buffer_m`, `max_gap_m`.
+  - Protocol: `__call__(points: pd.DataFrame) -> list[str]` accepting one trip's GPS points and returning directed `edge_id`s in travel order, or `[]` if unmatchable.
+- **Factory:** `make_corridor_matcher(edges, study_area_bbox, buffer_m=50.0, max_gap_m=250.0)` returning a configured `CorridorMatcher`.
 
 ---
 
@@ -104,4 +106,6 @@ All robustness properties are validated in `tests/test_routing.py`:
 | `test_single_station_no_self_trip` | Handles empty trip matrix on single-station graph |
 | `test_zero_trip_matrix` | Handles empty DataFrame trip matrix |
 | `test_station_outside_the_graph` | Handles unreachable foreign station IDs cleanly |
-| `test_routes_from_matched_edges_*` | Validates observed routes ingestion seam, duplicate route aggregation, and schema conformity |
+| `test_make_corridor_matcher_initialization` | Verifies CorridorMatcher initialization with default and custom parameters |
+| `test_corridor_matcher_call_raises_not_implemented` | Verifies placeholder status per map-matching plan |
+| `test_corridor_matcher_seam_wires_into_convert_observed_routes` | Verifies the handoff contract integration with ingestion's convert_observed_routes |
