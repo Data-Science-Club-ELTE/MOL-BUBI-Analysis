@@ -194,7 +194,7 @@ The written data contract remains the most important decision. It is deliberatel
 | --- | --- |
 | Project | name `mol-bubi-recommender`, version 0.1.0, random seed 42 |
 | Spatial | exchange CRS EPSG:4326, analysis CRS EPSG:23700, H3 resolution 9, study bounding box `[18.92, 47.35, 19.33, 47.61]` (min lon, min lat, max lon, max lat) |
-| Network | frozen graph label `budapest_osm_2026w1`, `bike` street network, `walk` walking network, digital elevation model (DEM) source label `copernicus_dem_30m`, uphill penalty α = 3.0 |
+| Network | frozen graph label `budapest_osm_2026w1`, `bike` street network, `walk` walking network, digital elevation model (DEM) source `copernicus_glo30_2021` (Copernicus DEM GLO-30, `docs/decisions/dem_source.md`), uphill penalty α = 3.0 |
 | Demand | population source label `worldpop_2026_100m`, population floor 100 per cell, k = 0.05, exponential decay, β = 0.0015 |
 | Station scoring | walk threshold 350 m, N = 10, minimum spacing 400 m, lane reach R = 400 m |
 | Scenarios | the three scenario names and their siting rules |
@@ -240,7 +240,7 @@ The BKK key is held by a team member and is deliberately absent from the reposit
 
 `network/graph.py` currently raises `NotImplementedError` for both graph building and directed-edge extraction. The design is unchanged: download and normalize the Budapest street and walking graphs with OSMnx and extract bike-lane tags. Lane coverage is determined **per direction** of each edge, handling tags that are relative to the way direction (for example `cycleway:left`, `cycleway:right`, `oneway:bicycle`) and parallel cycleways. The geoinformatics member defines which OSM tags count as a *dedicated bike lane* (per D3) and documents the rules.
 
-Edges are the unit of coverage. OSMnx merges road pieces between intersections, so lane tags can differ along one edge; whether to split edges where tags change or apply a majority rule is still open (§14). The config names `copernicus_dem_30m` as the elevation source and `budapest_osm_2026w1` as the frozen graph version, but no graph artifact, OSM extract date, or DEM file has been committed or documented yet.
+Edges are the unit of coverage. OSMnx merges road pieces between intersections, so lane tags can differ along one edge; whether to split edges where tags change or apply a majority rule is still open (§14). The elevation source is Copernicus DEM GLO-30, 2021 release, pinned by checksum in `docs/decisions/dem_source.md`. The config names `budapest_osm_2026w1` as the frozen graph version, but no graph artifact or OSM extract date has been committed or documented yet.
 
 ### 6.3 Synthetic trip generator (implemented)
 
@@ -554,7 +554,7 @@ Built-in boundaries of what the results can claim; each is documented in the met
 - ~~Obtain BKK's approval for the Futár API key.~~ Resolved 2026-11-04: BKK confirmed the key was approved automatically; requests at most every 5 seconds are acceptable (`docs/ingestion_notes.md` §1).
 - ~~Resolve BKK Futár licensing, attribution, and raw-snapshot redistribution terms.~~ Resolved 2026-11-04: CC BY 4.0, attribution "Data source: BKK Zrt., CC BY 4.0" (`docs/source_inventory.md` §4). The dashboard shows it below the map.
 - Record the OSM extract date and store or document the frozen graph artifact behind the `budapest_osm_2026w1` label.
-- Confirm the exact DEM product and version behind `copernicus_dem_30m`.
+- ~~Confirm the exact DEM product and version behind `copernicus_dem_30m`.~~ Resolved 2026-11-08: Copernicus DEM GLO-30, 2021 release on AWS, tiles `N47_00_E018_00` and `N47_00_E019_00`, config key `copernicus_glo30_2021`. The comparison with SRTM, the Budapest Open Data Atlas and Lechner DDM-5, and the sampling rules for #31, are in `docs/decisions/dem_source.md`.
 - ~~Confirm the population product, year, and licence: config names `worldpop_2026_100m`, while the source inventory still lists WorldPop versus GHSL as unresolved.~~ Resolved 2026-11-08: WorldPop R2025A v1, constrained, epoch 2026, under ODbL 1.0, checksum `e13123be…f5fd` (`docs/source_inventory.md` §2). The WorldPop-versus-GHSL comparison behind the choice, including GHSL's +9.8% Budapest bias, is in `docs/population_source.md`.
 
 ### 14.2 Network and geometry

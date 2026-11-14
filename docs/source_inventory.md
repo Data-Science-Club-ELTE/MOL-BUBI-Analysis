@@ -8,6 +8,7 @@ Unconfirmed items are marked **UNRESOLVED** rather than assumed.
 | WorldPop (R2025A v1, constrained, epoch 2026) | `population` | ODbL 1.0 | Yes | Free, no key | **Chosen** — `docs/population_source.md` |
 | GHSL GHS-POP (EC JRC, R2023A, epoch 2025) | `population` (alternative) | CC BY 4.0 | Yes | Free, no key | Evaluated, not used — `docs/population_source.md` |
 | BKK FUTÁR API | `stations` | CC BY 4.0 | Yes | Free API key required (approved) | Confirmed by BKK, 2026-11-04 |
+| Copernicus DEM GLO-30 (2021 release) | node elevations, edge `grade` | Copernicus WorldDEM-30 licence (free, redistribution allowed) | Yes | Free, no key | **Chosen** — `docs/decisions/dem_source.md` |
 
 ---
 
@@ -62,7 +63,20 @@ Evaluated against WorldPop and not adopted; the numbers are in `docs/population_
   - Rate limits? None officially published; BKK says one request every 5 seconds or less often is acceptable, and keys used abusively may be disabled. **Resolved**
   - Does the API still include MOL Bubi station data? Yes: the 2026-10-18 snapshot has 925 station records, and BKK says no other public MOL Bubi source exists. **Resolved**
 
-## 5. Real GPS route data (`route_type = observed`)
+## 5. Copernicus DEM GLO-30
+
+Chosen elevation source for per-edge grades; the comparison and sampling rules are in `docs/decisions/dem_source.md`.
+
+- **Dataset:** Copernicus DEM, instance COP-DEM-GLO-30-F, 2021 release as published in the AWS bucket `copernicus-dem-30m`; tiles `N47_00_E018_00` and `N47_00_E019_00`. It is a surface model (buildings and vegetation included), 1 arc-second grid, EPSG:4326, heights in metres above the EGM2008 geoid.
+- **Used by:** Network & Lanes → node elevations and the `grade` column on `edges` (#31)
+- **Licence:** "Licence for the use of the Copernicus WorldDEM-30", shipped with each tile as `INFO/eula_F.pdf`. It is free and worldwide for any natural or legal person, and allows reproduction, distribution, modification and combination with other data. There is no share-alike clause.
+- **Attribution:** derived outputs such as grades carry the "produced using Copernicus WorldDEM-30" notice at the end of this file. Redistributing the DEM itself also requires the liability sentence in `docs/decisions/dem_source.md` §3.
+- **Access:** free download, no registration, from `https://copernicus-dem-30m.s3.amazonaws.com/`.
+- **Checksums:** `7b44e390c85883b602e7f31fb76b5b4daa706d7d250bc195ff5e0dc9c6073801` (E018 tile) and `721c200cbe71cb23e8b6769361bb53ef4674a4bb622b60c813c4c0ec277390d7` (E019 tile), downloaded 2026-11-08.
+- **Open questions:**
+  - AWS does not say whether its copy is sub-release 2021_1 or 2021_2; the checksums pin the input either way. **UNRESOLVED**
+
+## 6. Real GPS route data (`route_type = observed`)
 
 - **Used by:** Station Ingestion → `routes` (README mentions "real GPS route conversion")
 - **Source, licence, attribution, access:** **UNRESOLVED.** Source not identified.
@@ -73,6 +87,10 @@ Evaluated against WorldPop and not adopted; the numbers are in `docs/population_
 ## Required attribution text (for the dashboard, README and exported tables)
 
 > Map data © OpenStreetMap contributors (ODbL). Population: WorldPop R2025A v1, constrained, 2026 (ODbL 1.0). Data source: BKK Zrt., CC BY 4.0.
+
+Once elevation or grade data is shown or exported, add the derived-data notice for the DEM:
+
+> produced using Copernicus WorldDEM-30 © DLR e.V. 2010-2014 and © Airbus Defence and Space GmbH 2014-2018 provided under COPERNICUS by the European Union and ESA; all rights reserved.
 
 The full WorldPop citation that must travel with the `population` table:
 
