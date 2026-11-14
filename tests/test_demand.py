@@ -30,11 +30,12 @@ def test_fixture_trip_matrix_has_reportable_mean(sample_stations, sample_populat
         ].sum()
     )
     assert demand_weighted_mean_trip_distance(trips, sample_stations) == pytest.approx(
-        1_161.892, abs=0.01
+        1_223.805, abs=0.01
     )
 
 
-def test_calibrated_beta_achieves_target_mean_on_2d_city_grid():
+def test_infinite_plane_beta_matches_grid_target():
+    # this test guards the analytical derivation and not the production default
     stations_data = []
     population_data = []
     grid_size = 17
@@ -65,7 +66,7 @@ def test_calibrated_beta_achieves_target_mean_on_2d_city_grid():
         stations,
         population,
         k_scaling=1.0,
-        beta_decay=DEFAULT_BETA_DECAY,
+        beta_decay=2 / TARGET_MEAN_DISTANCE_M,
     )
 
     assert demand_weighted_mean_trip_distance(trips, stations) == pytest.approx(
