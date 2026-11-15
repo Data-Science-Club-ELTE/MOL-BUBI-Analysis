@@ -106,7 +106,7 @@ section 2.
 | 3 | `cycleway:S:oneway=-1` | `-` |
 | 4 | The value is legacy `opposite_lane` or `opposite_track` | `-` |
 | 5 | The way is one-way for bicycles in the `+` direction: `oneway=yes` and `oneway:bicycle` is absent, `yes`, or `1` | `+` on both sides |
-| 6 | The way is one-way for bicycles in the `-` direction: `oneway:bicycle=-1` | `-` on both sides |
+| 6 | The way is one-way for bicycles in the `-` direction: `oneway:bicycle=-1` and `oneway` is not `-1` | `-` on both sides |
 | 7 | Otherwise: two-way for bicycles, either a two-way road or a motor one-way with `oneway:bicycle=no` | `+` on the right, `-` on the left |
 
 Rows 1 to 4 are explicit data and always win. Row 5 is the wiki's implicit default for a one-way road:
@@ -156,7 +156,8 @@ Normalize before applying the rule. Reverse the way's node order, swap the `cycl
 `cycleway:right*` keys, and reverse the numeric side `oneway` values: `yes` becomes `-1`, `-1` becomes
 `yes`, and `no` stays `no`. After that the way reads as `oneway=yes` and Tables 1 and 2 apply
 unchanged. Handle `oneway:bicycle=-1` with Table 2 row 6 instead; it describes a bicycle direction, not
-a way-geometry problem.
+a way-geometry problem. If `oneway=-1` and `oneway:bicycle=-1` appear together, normalize the way
+first: the two signs cancel and row 5 applies.
 
 ## 4. Worked Budapest examples
 
