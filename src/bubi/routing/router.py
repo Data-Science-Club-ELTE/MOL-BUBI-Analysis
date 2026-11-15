@@ -29,14 +29,38 @@ def compute_edge_weight(
     return length_m * (1.0 + uphill_penalty)
 
 
+def interpolate_bridge_grade(
+    grade: float,
+    is_bridge: bool = False,
+    is_tunnel: bool = False,
+) -> float:
+    """Replace false DEM grades on bridges and tunnels with zero.
+
+    A DEM (Digital Elevation Model) samples ground or water-surface elevation,
+    not the road surface.  A bridge over a river valley gets a large negative grade
+    from the DEM even though the road is flat; a tunnel under a hill gets a large
+    positive grade.  This function zeroes out the grade for edges tagged as bridge
+    or tunnel in OSM, so ``compute_edge_weight`` does not penalise them.
+    """
+    if is_bridge or is_tunnel:
+        return 0.0
+    return grade
+
+
 def build_graph(edges: gpd.GeoDataFrame, alpha: float = 3.0) -> nx.MultiDiGraph:
     """Build a weighted directed graph from the edges table.
 
     Each edge gets ``length_m``, ``grade``, and ``weight`` (from :func:`compute_edge_weight`)
     as attributes.  The reverse direction of an edge uses the negated grade: travelling
     downhill costs less, travelling uphill costs more.
+
+    If the edges table contains ``is_bridge`` or ``is_tunnel`` columns, grade is
+    interpolated to zero for those edges before computing the weight.
     """
     graph = nx.MultiDiGraph()
+    has_grade = "grade" in edges.columns
+    has_bridge = "is_bridge" in edges.columns
+    has_tunnel = "is_tunnel" in edges.columns
     for _, row in edges.iterrows():
         edge_id = str(row["edge_id"])
         parts = edge_id.split("-")
@@ -45,7 +69,10 @@ def build_graph(edges: gpd.GeoDataFrame, alpha: float = 3.0) -> nx.MultiDiGraph:
         u, v = parts[0], parts[1]
         key = int(parts[2])
         length_m = float(row["length_m"])
-        grade = float(row.get("grade", 0.0)) if "grade" in edges.columns else 0.0
+        raw_grade = float(row.get("grade", 0.0)) if has_grade else 0.0
+        is_bridge = bool(row.get("is_bridge", False)) if has_bridge else False
+        is_tunnel = bool(row.get("is_tunnel", False)) if has_tunnel else False
+        grade = interpolate_bridge_grade(raw_grade, is_bridge, is_tunnel)
         weight = compute_edge_weight(length_m, grade, alpha)
         graph.add_edge(u, v, key=key, length_m=length_m, grade=grade, weight=weight)
     return graph
@@ -56,7 +83,11 @@ def _shortest_path_edges(
     source_node: str,
     target_node: str,
 ) -> list[str] | None:
-    """Return the ordered list of edge_ids on the shortest weighted path, or None if unreachable."""
+    """Return the ordered list of edge_ids on the shortest weighted path, or None if unreachable.
+
+    When parallel edges connect two nodes, the lightest one is chosen.  Ties are broken
+    by key (lowest first) so the result is deterministic.
+    """
     if source_node == target_node:
         return []
     try:
@@ -66,11 +97,10 @@ def _shortest_path_edges(
 
     edge_ids: list[str] = []
     for a, b in zip(node_path[:-1], node_path[1:]):
-        # pick the lightest parallel edge
         best_key: int | None = None
         best_weight = float("inf")
-        for key, data in graph[a][b].items():
-            w = data.get("weight", float("inf"))
+        for key in sorted(graph[a][b]):
+            w = graph[a][b][key].get("weight", float("inf"))
             if w < best_weight:
                 best_weight = w
                 best_key = key
@@ -169,19 +199,12 @@ def route_station_pairs(
         df_routes = pd.DataFrame(route_rows)
         group_cols = ["scenario", "start_station_id", "end_station_id", "route_type", "edges"]
         df_routes = (
-            df_routes.groupby(group_cols, as_index=False)["trip_count"].sum().reset_index(drop=True)
+            df_routes.groupby(group_cols, as_index=False, sort=False)["trip_count"]
+            .sum()
+            .reset_index(drop=True)
         )
     else:
-        df_routes = pd.DataFrame(
-            columns=[
-                "scenario",
-                "start_station_id",
-                "end_station_id",
-                "route_type",
-                "edges",
-                "trip_count",
-            ]
-        )
+        df_routes = _empty_routes()
 
     # --- build report dict --------------------------------------------------------
     routing_report = {
@@ -212,6 +235,20 @@ def route_station_pairs(
         )
 
     return df_routes, routing_report
+
+
+def _empty_routes() -> pd.DataFrame:
+    """Return an empty DataFrame with the RoutesSchema columns."""
+    return pd.DataFrame(
+        columns=[
+            "scenario",
+            "start_station_id",
+            "end_station_id",
+            "route_type",
+            "edges",
+            "trip_count",
+        ]
+    )
 
 
 def _ensure_weights(graph: nx.MultiDiGraph, alpha: float) -> None:

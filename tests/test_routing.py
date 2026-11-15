@@ -2,9 +2,16 @@
 
 import networkx as nx
 import pandas as pd
+import pytest
 
+from bubi.routing.map_matching import CorridorMatcher, make_corridor_matcher
 from bubi.routing.report import NO_PATH, STATION_TOO_FAR, STATION_UNKNOWN, unroutable_report
-from bubi.routing.router import build_graph, compute_edge_weight, route_station_pairs
+from bubi.routing.router import (
+    build_graph,
+    compute_edge_weight,
+    interpolate_bridge_grade,
+    route_station_pairs,
+)
 from bubi.routing.snapping import snap_stations
 
 # the sample stations lie exactly on the nodes of the sample edges: futar_00k is node nk
@@ -361,3 +368,376 @@ def test_build_graph_sets_correct_weights(sample_edges):
     for u, v, key, data in graph.edges(keys=True, data=True):
         expected = compute_edge_weight(data["length_m"], data["grade"], alpha=3.0)
         assert data["weight"] == expected, f"edge {u}-{v}-{key}"
+
+
+# --- robustness: disconnected graph (task.md criterion 1) -----------------------------------
+
+
+def test_disconnected_graph_reports_every_unroutable_pair_no_crash():
+    """A fully disconnected graph reports every pair as unroutable without crashing.
+
+    Two separate components: {A, B} and {X, Y}. Trips across the boundary are
+    dropped; trips within a component are routed.
+    """
+    g = nx.MultiDiGraph()
+    g.add_edge("A", "B", key=0, length_m=100.0, grade=0.0)
+    g.add_edge("B", "A", key=0, length_m=100.0, grade=0.0)
+    g.add_edge("X", "Y", key=0, length_m=200.0, grade=0.0)
+    g.add_edge("Y", "X", key=0, length_m=200.0, grade=0.0)
+
+    stations = _station_df("A", "B", "X", "Y")
+    trips = _trips(
+        ("A", "B", 10.0),  # routable within component 1
+        ("A", "X", 20.0),  # cross-component: unroutable
+        ("X", "A", 15.0),  # cross-component: unroutable
+        ("X", "Y", 5.0),  # routable within component 2
+        ("B", "Y", 8.0),  # cross-component: unroutable
+    )
+
+    df_routes, report = route_station_pairs(g, trips, stations, alpha=3.0)
+
+    assert report["unroutable_pairs"] == 3
+    assert report["dropped_trips"] == 43.0
+    assert report["routed_pairs"] == 2
+    assert len(df_routes) == 2
+    routed_pairs = set(zip(df_routes["start_station_id"], df_routes["end_station_id"]))
+    assert routed_pairs == {("A", "B"), ("X", "Y")}
+
+
+# --- robustness: bridge/tunnel interpolation (task.md criterion 2) --------------------------
+
+
+def test_interpolate_bridge_grade_zeroes_false_slope():
+    """A bridge tagged in OSM gets grade=0 instead of a false DEM-derived slope."""
+    raw_grade = -0.15  # DEM says the bridge drops into a river valley
+    assert interpolate_bridge_grade(raw_grade, is_bridge=True) == 0.0
+    assert interpolate_bridge_grade(raw_grade, is_tunnel=True) == 0.0
+    # A normal edge keeps its grade
+    assert interpolate_bridge_grade(raw_grade) == raw_grade
+
+
+def test_bridge_grade_changes_route_choice():
+    """Without bridge interpolation the route avoids a false uphill; with it, the bridge wins.
+
+    Graph:
+        A --bridge--> B: 100m, raw DEM grade=0.2 (false: the bridge is flat)
+        A --> M --> B:    200m, grade=0.0 (flat detour)
+
+    Without interpolation:
+        A->B direct = 100 * (1 + 3*0.2) = 160
+        A->M->B     = 200 * (1 + 0) = 200
+        Direct wins at 160 vs 200, but cost is inflated.
+
+    With interpolation (bridge grade zeroed):
+        A->B direct = 100 * (1 + 0) = 100
+        A->M->B     = 200
+        Direct still wins, and at the correct cost.
+    """
+    # With false grade: bridge has grade 0.2 (not interpolated)
+    g_false = nx.MultiDiGraph()
+    g_false.add_edge("A", "B", key=0, length_m=100.0, grade=0.2)
+    g_false.add_edge("A", "M", key=0, length_m=100.0, grade=0.0)
+    g_false.add_edge("M", "B", key=0, length_m=100.0, grade=0.0)
+
+    # With interpolation: bridge grade zeroed
+    g_interp = nx.MultiDiGraph()
+    g_interp.add_edge("A", "B", key=0, length_m=100.0, grade=0.0)  # interpolated
+    g_interp.add_edge("A", "M", key=0, length_m=100.0, grade=0.0)
+    g_interp.add_edge("M", "B", key=0, length_m=100.0, grade=0.0)
+
+    stations = _station_df("A", "B", "M")
+    trips = _trips(("A", "B", 1.0))
+
+    # Both choose direct, but the weight differs
+    routes_false, _ = route_station_pairs(g_false, trips, stations, alpha=3.0)
+    routes_interp, _ = route_station_pairs(g_interp, trips, stations, alpha=3.0)
+
+    assert routes_false.iloc[0]["edges"] == "A-B-0"
+    assert routes_interp.iloc[0]["edges"] == "A-B-0"
+
+    # The false-grade version penalises the bridge; the interpolated one does not.
+    # Verify via weight: false = 100*(1+0.6)=160, interpolated = 100*(1+0)=100
+    w_false = g_false["A"]["B"][0].get("weight", compute_edge_weight(100.0, 0.2, 3.0))
+    w_interp = g_interp["A"]["B"][0].get("weight", compute_edge_weight(100.0, 0.0, 3.0))
+    assert w_false > w_interp
+
+
+def test_bridge_that_would_divert_route_without_interpolation():
+    """A steep false grade on a bridge forces a long detour; interpolation restores the short path.
+
+    A --bridge--> B: 100m, raw DEM grade=0.5  => weight = 100*(1+1.5) = 250
+    A --> M --> B:    120m total, grade=0.0    => weight = 120
+
+    Without interpolation: detour wins (120 < 250).
+    With interpolation:    bridge wins (100 < 120).
+    """
+    g_no_interp = nx.MultiDiGraph()
+    g_no_interp.add_edge("A", "B", key=0, length_m=100.0, grade=0.5)
+    g_no_interp.add_edge("A", "M", key=0, length_m=60.0, grade=0.0)
+    g_no_interp.add_edge("M", "B", key=0, length_m=60.0, grade=0.0)
+
+    g_interp = nx.MultiDiGraph()
+    g_interp.add_edge("A", "B", key=0, length_m=100.0, grade=0.0)  # bridge: grade zeroed
+    g_interp.add_edge("A", "M", key=0, length_m=60.0, grade=0.0)
+    g_interp.add_edge("M", "B", key=0, length_m=60.0, grade=0.0)
+
+    stations = _station_df("A", "B", "M")
+    trips = _trips(("A", "B", 1.0))
+
+    routes_no, _ = route_station_pairs(g_no_interp, trips, stations, alpha=3.0)
+    routes_yes, _ = route_station_pairs(g_interp, trips, stations, alpha=3.0)
+
+    # Without interpolation: takes the flat detour
+    assert routes_no.iloc[0]["edges"] == "A-M-0,M-B-0"
+    # With interpolation: takes the direct bridge
+    assert routes_yes.iloc[0]["edges"] == "A-B-0"
+
+
+def test_build_graph_applies_bridge_interpolation():
+    """build_graph zeroes grade for edges with is_bridge=True in the edges table."""
+    import geopandas as gpd
+    from shapely.geometry import LineString
+
+    edges = gpd.GeoDataFrame(
+        {
+            "edge_id": ["n1-n2-0", "n2-n3-0"],
+            "osm_way_id": [1, 2],
+            "length_m": [100.0, 100.0],
+            "has_dedicated_lane": [False, False],
+            "grade": [-0.15, 0.05],
+            "is_bridge": [True, False],
+            "geometry": [
+                LineString([(19.05, 47.50), (19.06, 47.50)]),
+                LineString([(19.06, 47.50), (19.07, 47.50)]),
+            ],
+        },
+        crs="EPSG:4326",
+    )
+    graph = build_graph(edges, alpha=3.0)
+
+    # Bridge edge should have grade=0 (interpolated from -0.15)
+    bridge_data = graph["n1"]["n2"][0]
+    assert bridge_data["grade"] == 0.0
+    assert bridge_data["weight"] == compute_edge_weight(100.0, 0.0, 3.0)
+
+    # Normal edge keeps its grade
+    normal_data = graph["n2"]["n3"][0]
+    assert normal_data["grade"] == 0.05
+    assert normal_data["weight"] == compute_edge_weight(100.0, 0.05, 3.0)
+
+
+# --- robustness: parallel edges deterministic (task.md criterion 3) -------------------------
+
+
+def test_parallel_edges_deterministic():
+    """Two parallel edges between the same nodes: the lighter one is always chosen.
+
+    A-->B has key=0 (length=300, grade=0, weight=300) and key=1 (length=100, grade=0,
+    weight=100). key=1 should always be chosen.
+    """
+    g = nx.MultiDiGraph()
+    g.add_edge("A", "B", key=0, length_m=300.0, grade=0.0)
+    g.add_edge("A", "B", key=1, length_m=100.0, grade=0.0)
+
+    stations = _station_df("A", "B")
+    trips = _trips(("A", "B", 5.0))
+
+    for _ in range(5):
+        df, _ = route_station_pairs(g, trips, stations, alpha=3.0)
+        assert df.iloc[0]["edges"] == "A-B-1"
+
+
+def test_parallel_edges_same_weight_deterministic():
+    """Two parallel edges with equal weight: the one with lower key wins deterministically."""
+    g = nx.MultiDiGraph()
+    g.add_edge("A", "B", key=0, length_m=100.0, grade=0.0)
+    g.add_edge("A", "B", key=1, length_m=100.0, grade=0.0)
+
+    stations = _station_df("A", "B")
+    trips = _trips(("A", "B", 5.0))
+
+    results = set()
+    for _ in range(5):
+        df, _ = route_station_pairs(g, trips, stations, alpha=3.0)
+        results.add(df.iloc[0]["edges"])
+
+    # Should always pick the same edge (key=0, the lower key)
+    assert len(results) == 1
+    assert results == {"A-B-0"}
+
+
+def test_same_input_twice_gives_same_route():
+    """Running the router twice with identical input gives identical output."""
+    graph = _weighted_graph()
+    stations = _station_df("A", "B", "C")
+    trips = _trips(("A", "B", 10.0), ("A", "C", 5.0), ("B", "C", 3.0))
+
+    df1, report1 = route_station_pairs(graph, trips, stations, alpha=3.0)
+    df2, report2 = route_station_pairs(graph, trips, stations, alpha=3.0)
+
+    pd.testing.assert_frame_equal(df1.reset_index(drop=True), df2.reset_index(drop=True))
+    assert report1 == report2
+
+
+# --- robustness: degenerate inputs (task.md criterion 4) ------------------------------------
+
+
+def test_single_station_produces_self_route():
+    """A single station with a self-trip produces an empty-edge route."""
+    g = nx.MultiDiGraph()
+    g.add_edge("A", "A", key=0, length_m=0.0, grade=0.0)
+    stations = _station_df("A")
+    trips = _trips(("A", "A", 1.0))
+
+    df_routes, report = route_station_pairs(g, trips, stations, alpha=3.0)
+
+    assert len(df_routes) == 1
+    assert df_routes.iloc[0]["edges"] == ""
+    assert report["routed_pairs"] == 1
+    assert report["unroutable_pairs"] == 0
+
+
+def test_single_station_no_self_trip():
+    """A single station with no trip produces an empty routes table."""
+    g = nx.MultiDiGraph()
+    g.add_node("A")
+    stations = _station_df("A")
+    trips = pd.DataFrame(columns=["scenario", "start_station_id", "end_station_id", "trip_count"])
+
+    df_routes, report = route_station_pairs(g, trips, stations, alpha=3.0)
+
+    assert len(df_routes) == 0
+    assert report["total_pairs"] == 0
+    assert report["routed_pairs"] == 0
+
+
+def test_zero_trip_matrix():
+    """An empty trip matrix produces an empty routes table and zero in every report field."""
+    graph = _weighted_graph()
+    stations = _station_df("A", "B", "C")
+    trips = pd.DataFrame(columns=["scenario", "start_station_id", "end_station_id", "trip_count"])
+
+    df_routes, report = route_station_pairs(graph, trips, stations, alpha=3.0)
+
+    assert len(df_routes) == 0
+    assert report["total_pairs"] == 0
+    assert report["routed_pairs"] == 0
+    assert report["unroutable_pairs"] == 0
+    assert report["dropped_trips"] == 0.0
+    assert report["pairs_computed"] == 0
+    assert report["pairs_cached"] == 0
+
+
+def test_station_outside_the_graph():
+    """A station not present in the graph is flagged and its trips are dropped."""
+    g = nx.MultiDiGraph()
+    g.add_edge("A", "B", key=0, length_m=100.0, grade=0.0)
+    g.add_edge("B", "A", key=0, length_m=100.0, grade=0.0)
+
+    stations = _station_df("A", "B", "ghost")
+    trips = _trips(
+        ("A", "B", 10.0),
+        ("ghost", "A", 20.0),
+        ("B", "ghost", 15.0),
+    )
+
+    df_routes, report = route_station_pairs(g, trips, stations, alpha=3.0)
+
+    assert report["unroutable_pairs"] == 2
+    assert report["dropped_trips"] == 35.0
+    assert report["routed_pairs"] == 1
+    assert len(df_routes) == 1
+    assert df_routes.iloc[0]["start_station_id"] == "A"
+    assert df_routes.iloc[0]["end_station_id"] == "B"
+
+
+# --- map-matching seam: CorridorMatcher & make_corridor_matcher (task.md criterion 5 & PR #70 §5)
+
+
+def test_make_corridor_matcher_initialization(sample_edges):
+    """make_corridor_matcher creates a CorridorMatcher with correct attributes and defaults."""
+    bbox = (18.92, 47.35, 19.33, 47.61)
+    matcher = make_corridor_matcher(sample_edges, bbox)
+
+    assert isinstance(matcher, CorridorMatcher)
+    assert matcher.edges is sample_edges
+    assert matcher.study_area_bbox == bbox
+    assert matcher.buffer_m == 50.0
+    assert matcher.max_gap_m == 250.0
+    assert len(matcher.drops) == 0
+    assert matcher.suspect == []
+
+
+def test_corridor_matcher_custom_parameters(sample_edges):
+    """Custom buffer_m and max_gap_m are passed to CorridorMatcher."""
+    bbox = (18.92, 47.35, 19.33, 47.61)
+    matcher = make_corridor_matcher(sample_edges, bbox, buffer_m=75.0, max_gap_m=300.0)
+
+    assert matcher.buffer_m == 75.0
+    assert matcher.max_gap_m == 300.0
+
+
+def test_corridor_matcher_call_raises_not_implemented(sample_edges):
+    """CorridorMatcher.__call__ documents that algorithm implementation follows in follow-up issue."""
+    bbox = (18.92, 47.35, 19.33, 47.61)
+    matcher = make_corridor_matcher(sample_edges, bbox)
+
+    points = pd.DataFrame(
+        {
+            "trip_id": ["t01"],
+            "timestamp": ["2026-10-18T10:00:00Z"],
+            "lat": [47.4979],
+            "lon": [19.0541],
+            "timestamp_utc": [pd.Timestamp("2026-10-18 10:00:00", tz="UTC")],
+        }
+    )
+
+    with pytest.raises(NotImplementedError, match="CorridorMatcher algorithm"):
+        matcher(points)
+
+
+def test_corridor_matcher_seam_wires_into_convert_observed_routes(sample_edges, sample_stations):
+    """Seam check: a CorridorMatcher subclass stands in for CS 2's matcher with convert_observed_routes."""
+    from bubi.contracts.schemas import RoutesSchema
+    from bubi.ingestion.observed_routes import convert_observed_routes
+
+    bbox = (18.92, 47.35, 19.33, 47.61)
+
+    class MockCorridorMatcher(CorridorMatcher):
+        def __call__(self, points: pd.DataFrame) -> list[str]:
+            # Mock match returning a known edge for t01, unmatchable for others
+            trip_id = points["trip_id"].iloc[0]
+            if trip_id == "t01":
+                return ["n1-n2-0"]
+            self.drops["gap"] += 1
+            return []
+
+    matcher = MockCorridorMatcher(sample_edges, bbox)
+    trips = pd.DataFrame(
+        [
+            ("t01", "futar_001", "futar_002", "2026-10-18T10:00:00Z", "2026-10-18T10:15:00Z"),
+            ("t02", "futar_002", "futar_003", "2026-10-18T11:00:00Z", "2026-10-18T11:20:00Z"),
+        ],
+        columns=["trip_id", "start_station_id", "end_station_id", "start_time", "end_time"],
+    )
+    gps = pd.DataFrame(
+        [
+            ("t01", "2026-10-18T10:00:00Z", 47.4979, 19.0541),
+            ("t01", "2026-10-18T10:15:00Z", 47.4893, 19.0617),
+            ("t02", "2026-10-18T11:00:00Z", 47.4893, 19.0617),
+            ("t02", "2026-10-18T11:20:00Z", 47.5058, 19.0632),
+        ],
+        columns=["trip_id", "timestamp", "lat", "lon"],
+    )
+
+    routes, report = convert_observed_routes(
+        trips, gps, sample_stations, matcher=matcher, edges=sample_edges
+    )
+
+    RoutesSchema.validate(routes)
+    assert len(routes) == 1
+    assert routes.iloc[0]["edges"] == ["n1-n2-0"]
+    assert routes.iloc[0]["route_type"] == "observed"
+    assert report["converted_trips"] == 1
+    assert report["unmatched_trace"] == 1
+    assert matcher.drops["gap"] == 1
