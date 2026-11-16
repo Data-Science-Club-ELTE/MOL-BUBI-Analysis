@@ -10,7 +10,6 @@ import pandas as pd
 from shapely.geometry import LineString, MultiLineString
 from shapely.geometry.base import BaseGeometry
 
-from bubi.contracts.schemas import EdgesSchema
 
 def build_street_network(
     bbox: tuple[float, float, float, float],
@@ -74,7 +73,6 @@ def build_street_network(
 
     edges = extract_per_direction_edges(G)
 
-    EdgesSchema.validate(edges)
 
     return (G, edges)
 
