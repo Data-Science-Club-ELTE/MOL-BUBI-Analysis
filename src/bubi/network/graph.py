@@ -10,11 +10,29 @@ import pandas as pd
 from shapely.geometry import LineString, MultiLineString
 from shapely.geometry.base import BaseGeometry
 
+REQUIRED_WAY_TAGS = (
+    "bicycle",
+    "bicycle:lanes",
+    "cycleway",
+    "cycleway:left",
+    "cycleway:right",
+    "cycleway:both",
+    "cycleway:left:oneway",
+    "cycleway:right:oneway",
+    "cycleway:both:oneway",
+    "highway",
+    "lanes:forward",
+    "oneway",
+    "oneway:bicycle",
+)
+DESIGNATED_FOOTWAY_FILTER = '["highway"="footway"]["bicycle"="designated"]'
+
 
 def build_street_network(
     bbox: tuple[float, float, float, float],
     network_type: str = "bike",
     elevation_dem_path: Optional[Path] = None,
+    include_designated_footways: bool = True,
 ) -> tuple[nx.MultiDiGraph, gpd.GeoDataFrame]:
     """Download Budapest street network via OSMnx and build per-direction lane model.
 
@@ -22,60 +40,43 @@ def build_street_network(
         bbox: (min_lon, min_lat, max_lon, max_lat)
         network_type: "bike" or "all"
         elevation_dem_path: Optional path to elevation raster (DEM) to add grades.
+        include_designated_footways: Keep highway=footway + bicycle=designated
+            ways in the bike network, where OSMnx's bike filter drops them.
 
     Returns:
         Tuple of (NetworkX directed graph, GeoDataFrame adhering to EdgesSchema).
     """
 
-    # Ensure that relevant OSM tags are downloaded and retained.
-    required_tags = [
-        "lanes",
-        "lanes:forward",
-        "lanes:backward",
-        "oneway",
-        "oneway:bicycle",
-        "bicycle",
-        "cycleway",
-        "cycleway:left",
-        "cycleway:right",
-        "cycleway:both",
-        "cycleway:left:oneway",
-        "cycleway:right:oneway",
-        "cycleway:both:oneway",
-        "oneway:bicycle",
-        "bicycle",
-        "bicycle_road",
-        "cyclestreet",
-    ]
+    custom_filter = None
+    if network_type == "bike" and include_designated_footways:
+        # The bike preset drops highway=footway, so ask for the shared paths
+        # it would lose. The filter list is a union, not an intersection.
+        from osmnx._overpass import _get_network_filter
+
+        custom_filter = [_get_network_filter("bike"), DESIGNATED_FOOTWAY_FILTER]
 
     original_tags = ox.settings.useful_tags_way
-
-    ox.settings.useful_tags_way = list(dict.fromkeys([
-        *original_tags,
-        *required_tags,
-    ]))
-
+    ox.settings.useful_tags_way = list(dict.fromkeys([*original_tags, *REQUIRED_WAY_TAGS]))
     try:
-        # Download directed street network.
         G = ox.graph.graph_from_bbox(
             bbox=bbox,
             network_type=network_type,
             simplify=False,
             retain_all=True,
+            custom_filter=custom_filter,
         )
     finally:
-        # Restore global OSMnx settings.
         ox.settings.useful_tags_way = original_tags
 
-    # add missing cycling edges
-    n_added = _add_bicycle_reverse_edges(G)
-    print(f"Added {n_added} reverse bicycle edges.")
-
-    edges = extract_per_direction_edges(G)
+    return postprocess_graph(G)
 
 
-    return (G, edges)
-
+def postprocess_graph(
+    graph: nx.MultiDiGraph,
+) -> tuple[nx.MultiDiGraph, gpd.GeoDataFrame]:
+    """Add contraflow bicycle edges and extract the per-direction edges table."""
+    _add_bicycle_reverse_edges(graph)
+    return graph, extract_per_direction_edges(graph)
 
 
 def extract_per_direction_edges(graph: nx.MultiDiGraph) -> gpd.GeoDataFrame:
@@ -97,11 +98,7 @@ def extract_per_direction_edges(graph: nx.MultiDiGraph) -> gpd.GeoDataFrame:
 
     # Construct unique directed edge identifiers.
     edges["edge_id"] = (
-        edges["u"].astype(str)
-        + "-"
-        + edges["v"].astype(str)
-        + "-"
-        + edges["key"].astype(str)
+        edges["u"].astype(str) + "-" + edges["v"].astype(str) + "-" + edges["key"].astype(str)
     )
 
     # Extract the original OSM way ID.
@@ -136,6 +133,7 @@ def extract_per_direction_edges(graph: nx.MultiDiGraph) -> gpd.GeoDataFrame:
 
     return result
 
+
 def _get_tag(edge: pd.Series, key: str) -> str:
     """Get and normalize an OSM tag from an edge Series."""
     value = edge.get(key)
@@ -146,103 +144,126 @@ def _get_tag(edge: pd.Series, key: str) -> str:
     return str(value).strip().lower()
 
 
-def _is_dedicated(value: str) -> bool:
-    return value in {"lane", "track"}
+DEDICATED = {"lane", "track"}
+LEGACY_CONTRAFLOW = {"opposite_lane", "opposite_track"}
+ONEWAY_VALUES = {"true", "yes", "1"}
+
+
+def _side_facility(edge: pd.Series, side: str) -> str:
+    """First tag that decides this side, in precedence order.
+
+    A side-specific value wins even when it is `no`: that is what stops an
+    explicit `cycleway:right=no` from falling back to `cycleway=lane`.
+    """
+    for key in (f"cycleway:{side}", "cycleway:both", "cycleway"):
+        value = _get_tag(edge, key)
+        if value:
+            return value
+    return ""
+
+
+def _lanes_designated(edge: pd.Series, side: str) -> bool:
+    """True when bicycle:lanes marks a designated lane on this side.
+
+    B1 packs the layout into :lanes. The values run left to right, so the last
+    lanes:forward values are the right side; the rest belong to the left side.
+    """
+    raw = _get_tag(edge, "bicycle:lanes")
+    if not raw:
+        return False
+    values = [value.strip() for value in raw.split("|")]
+    if _get_tag(edge, "oneway") in ONEWAY_VALUES:
+        return side == "right" and "designated" in values
+    forward = _get_tag(edge, "lanes:forward")
+    if not forward.isdigit():
+        return False
+    split = len(values) - int(forward)
+    if split <= 0:
+        return False
+    window = values[split:] if side == "right" else values[:split]
+    return "designated" in window
+
+
+def _side_serves(edge: pd.Series, side: str, value: str, oneway: bool) -> str:
+    """Direction a side facility serves: `+`, `-`, `both`, or `` for none."""
+    if value in LEGACY_CONTRAFLOW:
+        return "-"
+    side_oneway = _get_tag(edge, f"cycleway:{side}:oneway")
+    if side_oneway in {"yes", "1"}:
+        return "+"
+    if side_oneway == "no":
+        return "both"
+    if side_oneway == "-1":
+        return "-"
+    if oneway:
+        if _get_tag(edge, "oneway:bicycle") == "no":
+            # M1: the left lane is the contraflow lane. T3: the track itself
+            # is bidirectional while the carriageway stays one-way.
+            if value == "track":
+                return "both"
+            return "-" if side == "left" else "+"
+        # Both sides of a one-way street flow with the traffic direction (M2b).
+        return "+"
+    return "+" if side == "right" else "-"
+
 
 def _has_dedicated_lane(edge: pd.Series) -> bool:
-    """
-    Return True if dedicated cycling infrastructure exists
-    in the direction of this directed graph edge.
-    """
+    """True when this directed edge has a dedicated lane or track.
 
-    # WARNING: this implementation is insanely ugly.
-    # If you want to know why or want to make it nicer (you can't) look at this page: https://wiki.openstreetmap.org/wiki/Bicycle
-
-    # getting important tag values
+    `reversed` is OSMnx's marker for the mirror edge of a two-way way, and for
+    the contraflow edge this module adds. Every other edge runs with the way.
+    """
+    direction = "-" if _get_tag(edge, "reversed") == "true" else "+"
+    oneway = _get_tag(edge, "oneway") in ONEWAY_VALUES
     highway = _get_tag(edge, "highway")
-    is_reversed_edge = edge.get("reversed", False)
-    oneway = _get_tag(edge, "oneway")
-    bicycle = _get_tag(edge, "bicycle")
+    if highway == "cycleway" or (
+        highway in {"path", "footway"} and _get_tag(edge, "bicycle") == "designated"
+    ):
+        return direction == "+" or not oneway or _get_tag(edge, "oneway:bicycle") == "no"
 
-    cycleway = _get_tag(edge, "cycleway")
-    cycleway_both = _get_tag(edge, "cycleway:both")
-
-    # If the cycling track is a separate OSM way:
-    if highway == "cycleway" or (highway in {"footway", "path"} and bicycle == "designated"):    # could be path or footway with bicycle=designated, not just cycleway
-        # the original tag has "oneway"="yes" but we check for "true" instead of "yes", because OSMnx stores oneway as boolean
-        if oneway == "true":
-            return not is_reversed_edge
+    for side in ("left", "right"):
+        value = _side_facility(edge, side)
+        if value in DEDICATED or value in LEGACY_CONTRAFLOW:
+            serves = _side_serves(edge, side, value, oneway)
+        elif not value and _lanes_designated(edge, side):
+            serves = _side_serves(edge, side, "lane", oneway)
         else:
+            continue
+        if serves in {direction, "both"}:
             return True
-
-    # in this special case we can return True now
-    if _is_dedicated(cycleway_both):
-        return True
-
-    # if not separate OSM way but oneway road (this matters because if the road is oneway the cycleway is also oneway by default)
-    if oneway == "true":
-        # this means cycling infra in only oneway
-        if _is_dedicated(cycleway):
-            return not is_reversed_edge
-
-        if not is_reversed_edge:
-            return _is_dedicated_right_side_forward(edge) or _is_dedicated_left_side_forward(edge)
-        else:
-            return _is_dedicated_right_side_backward(edge) or _is_dedicated_left_side_backward(edge)
-    else:
-        # this means cycling infra both ways
-        if _is_dedicated(cycleway) or _is_dedicated(cycleway_both):
-            return True
-
-        if not is_reversed_edge:
-            return _is_dedicated_right_side_forward(edge) or _is_dedicated_left_side_forward(edge)
-        else:
-            return _is_dedicated_right_side_backward(edge) or _is_dedicated_left_side_backward(edge)
-
-def _is_dedicated_right_side_forward(edge: pd.Series) -> bool:
-    cycleway_right = _get_tag(edge, "cycleway:right")
-    cycleway_right_oneway = _get_tag(edge, "cycleway:right:oneway")
-
-    if _is_dedicated(cycleway_right) and cycleway_right_oneway != "-1":
-        return True
-    return False
-
-def _is_dedicated_right_side_backward(edge: pd.Series) -> bool:
-    cycleway_right = _get_tag(edge, "cycleway:right")
-    cycleway_right_oneway = _get_tag(edge, "cycleway:right:oneway")
-
-    if _is_dedicated(cycleway_right) and (cycleway_right_oneway == "-1" or cycleway_right_oneway == "no"):
-        return True
-    return False
-
-def _is_dedicated_left_side_backward(edge: pd.Series) -> bool:
-    cycleway_left = _get_tag(edge, "cycleway:left")
-    cycleway_left_oneway = _get_tag(edge, "cycleway:left:oneway")
-
-    if _is_dedicated(cycleway_left) and cycleway_left_oneway != "-1":
-        return True
-    return False
-
-def _is_dedicated_left_side_forward(edge: pd.Series) -> bool:
-    cycleway_left = _get_tag(edge, "cycleway:left")
-    cycleway_left_oneway = _get_tag(edge, "cycleway:left:oneway")
-
-    if _is_dedicated(cycleway_left) and (cycleway_left_oneway == "-1" or cycleway_left_oneway == "no"):
-        return True
     return False
 
 
-
-'''
+"""
 For adding missing cycling edges
-'''
+"""
+
+
+CONTRAFLOW_FACILITY = LEGACY_CONTRAFLOW | {"opposite"}
+
+
+def _dict_tag(data: dict, key: str) -> str:
+    value = data.get(key)
+    return "" if value is None else str(value).strip().lower()
+
+
+def _allows_bicycle_contraflow(data: dict) -> bool:
+    """Whether cyclists may travel against a one-way way and need the reverse edge."""
+    if _dict_tag(data, "oneway:bicycle") == "no":
+        return True
+    if any(
+        _dict_tag(data, f"cycleway:{side}:oneway") == "-1" for side in ("left", "right", "both")
+    ):
+        return True
+    return any(
+        _dict_tag(data, key) in CONTRAFLOW_FACILITY
+        for key in ("cycleway", "cycleway:left", "cycleway:right", "cycleway:both")
+    )
+
 
 def _is_oneway(value: object) -> bool:
     """Handle both OSM tag strings and OSMnx boolean values."""
-    return (
-        value is True
-        or str(value).strip().lower() in {"yes", "true", "1"}
-    )
+    return value is True or str(value).strip().lower() in {"yes", "true", "1"}
 
 
 def _same_osm_way(osmid_1: int | None, osmid_2: int | None) -> bool:
@@ -262,19 +283,18 @@ def _reverse_geometry(geom: BaseGeometry | None) -> BaseGeometry | None:
         return LineString(list(geom.coords)[::-1])
 
     if geom.geom_type == "MultiLineString":
-        return MultiLineString([
-            LineString(list(line.coords)[::-1])
-            for line in reversed(geom.geoms)
-        ])
+        return MultiLineString(
+            [LineString(list(line.coords)[::-1]) for line in reversed(geom.geoms)]
+        )
 
     return geom
 
 
 def _add_bicycle_reverse_edges(G: nx.MultiDiGraph):
     """
-    Add missing reverse edges when:
-      - oneway = yes (or OSMnx's equivalent boolean True)
-      - oneway:bicycle = no
+    Add the missing reverse edge when a one-way way still lets cyclists ride
+    against the traffic: oneway:bicycle=no, a contraflow side lane, or the
+    legacy opposite_lane/opposite_track/opposite values.
 
     Returns the number of edges added.
     """
@@ -283,12 +303,11 @@ def _add_bicycle_reverse_edges(G: nx.MultiDiGraph):
 
     # Make a snapshot because we will modify the graph afterwards.
     for u, v, key, data in list(G.edges(keys=True, data=True)):
-
         # Check the OSM one-way and bicycle-specific tags.
         if not _is_oneway(data.get("oneway")):
             continue
 
-        if str(data.get("oneway:bicycle", "")).strip().lower() != "no":
+        if not _allows_bicycle_contraflow(data):
             continue
 
         # Check whether the reverse edge for this same OSM way exists.
@@ -310,9 +329,7 @@ def _add_bicycle_reverse_edges(G: nx.MultiDiGraph):
 
         # Reverse geometry if it is already present.
         if reverse_data.get("geometry") is not None:
-            reverse_data["geometry"] = _reverse_geometry(
-                reverse_data["geometry"]
-            )
+            reverse_data["geometry"] = _reverse_geometry(reverse_data["geometry"])
 
         # Queue the new edge for insertion.
         edges_to_add.append((v, u, reverse_data))
@@ -322,4 +339,3 @@ def _add_bicycle_reverse_edges(G: nx.MultiDiGraph):
         G.add_edge(u, v, **data)
 
     return len(edges_to_add)
-
