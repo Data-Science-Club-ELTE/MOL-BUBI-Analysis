@@ -19,6 +19,9 @@ order and drops the raw value, so a side lane can end up on the traffic edge
 or its mirror (see test_osm_xml_oneway_minus_one).
 """
 
+import sys
+from pathlib import Path
+
 import networkx as nx
 import osmnx as ox
 import pytest
@@ -35,6 +38,9 @@ from bubi.network.graph import (
 )
 
 WIKI = "https://wiki.openstreetmap.org/wiki/Bicycle"
+FIXTURES = Path(__file__).parent / "fixtures"
+FIXTURE_OSM = FIXTURES / "lane_tags.osm"
+FIXTURE_README = FIXTURES / "lane_tags.md"
 
 CY = {"highway": "cycleway"}
 SIDEPATH = {"bicycle": "use_sidepath"}
@@ -825,9 +831,69 @@ def _osm_xml(ways):
     return "\n".join(lines)
 
 
-def _load_xml(ways, tmp_path):
+def _flat_ways():
+    """All case ways in fixture order."""
+    return [way for case in CASES for way in case["ways"]]
+
+
+def _case_offsets():
+    """First flat way index for each case id."""
+    offsets = {}
+    index = 0
+    for case in CASES:
+        offsets[case["id"]] = index
+        index += len(case["ways"])
+    return offsets
+
+
+def _fixture_xml():
+    return _osm_xml(_flat_ways())
+
+
+def _fixture_readme():
+    lines = [
+        "# Lane-tag fixture graph",
+        "",
+        "lane_tags.osm is the graph used by test_osm_xml_lane_tags. It is generated",
+        "from CASES in tests/test_network_lane_tags.py, one way per case way.",
+        "",
+        "Regenerate both files after editing CASES:",
+        "",
+        "    PYTHONPATH=src python tests/test_network_lane_tags.py --write-fixture",
+        "",
+        "Way id is 1000 + flat index; its nodes are 2 * flat index + 1 and",
+        "2 * flat index + 2, so no two ways share geometry. Load it with",
+        "ox.settings.useful_tags_way extended by REQUIRED_WAY_TAGS, then",
+        "ox.graph.graph_from_xml(path, bidirectional=False, simplify=False, retain_all=True).",
+        "",
+        "| Way | Case | Reference | Tags | + | - |",
+        "|---|---|---|---|---|---|",
+    ]
+    flat_index = 0
+    for case in CASES:
+        for way_index, way in enumerate(case["ways"]):
+            tags = {"highway": "secondary", **way}
+            cells = ", ".join(
+                f"{key}={str(value).replace(chr(124), chr(92) + chr(124))}"
+                for key, value in tags.items()
+            )
+            plus = case["expect"].get((way_index, "+"), "absent")
+            minus = case["expect"].get((way_index, "-"), "absent")
+            lines.append(
+                f"| {1000 + flat_index} | {case['id']} | {case['ref']} | {cells} | "
+                f"{plus} | {minus} |"
+            )
+            flat_index += 1
+    return "\n".join(lines) + "\n"
+
+
+def _write_xml(ways, tmp_path):
     path = tmp_path / "case.osm"
     path.write_text(_osm_xml(ways), encoding="utf-8")
+    return path
+
+
+def _load_xml(path):
     original_tags = list(ox.settings.useful_tags_way)
     try:
         ox.settings.useful_tags_way = list(dict.fromkeys([*original_tags, *REQUIRED_WAY_TAGS]))
@@ -838,15 +904,30 @@ def _load_xml(ways, tmp_path):
         ox.settings.useful_tags_way = original_tags
 
 
-@pytest.mark.parametrize("case", CASES, ids=[case["id"] for case in CASES])
-def test_osm_xml_lane_tags(case, tmp_path):
-    """The same cases survive OSMnx parsing: booleans, node order, tags."""
-    graph = _load_xml(case["ways"], tmp_path)
+@pytest.fixture(scope="module")
+def fixture_flags():
+    graph = _load_xml(FIXTURE_OSM)
     _, edges = postprocess_graph(graph)
-    flags = _flags(edges, len(case["ways"]))
-    assert flags == case["expect"], (
-        f"{case['id']} ({case['ref']}): got {flags}, want {case['expect']}. "
-        f"Reference tagging: {WIKI}"
+    return _flags(edges, len(_flat_ways()))
+
+
+def test_fixture_matches_generator():
+    """The committed graph and README stay in step with CASES."""
+    assert FIXTURE_OSM.read_text(encoding="utf-8") == _fixture_xml()
+    assert FIXTURE_README.read_text(encoding="utf-8") == _fixture_readme()
+
+
+@pytest.mark.parametrize("case", CASES, ids=[case["id"] for case in CASES])
+def test_osm_xml_lane_tags(case, fixture_flags):
+    """The same cases survive OSMnx parsing: booleans, node order, tags."""
+    offset = _case_offsets()[case["id"]]
+    count = len(case["ways"])
+    got = {key: value for key, value in fixture_flags.items() if offset <= key[0] < offset + count}
+    expected = {
+        (offset + way, direction): value for (way, direction), value in case["expect"].items()
+    }
+    assert got == expected, (
+        f"{case['id']} ({case['ref']}): got {got}, want {expected}. Reference tagging: {WIKI}"
     )
 
 
@@ -873,7 +954,7 @@ XML_ONEWAY_CASES = [
 @pytest.mark.parametrize("case", XML_ONEWAY_CASES, ids=[case["id"] for case in XML_ONEWAY_CASES])
 def test_osm_xml_oneway_minus_one(case, tmp_path):
     """Characterises oneway=-1; left/right is not remapped to traffic direction."""
-    graph = _load_xml(case["ways"], tmp_path)
+    graph = _load_xml(_write_xml(case["ways"], tmp_path))
     _, edges = postprocess_graph(graph)
     flags = _flags(edges, len(case["ways"]))
     assert flags == case["expect"], f"{case['id']}: got {flags}"
@@ -936,3 +1017,12 @@ def test_all_network_keeps_osmnx_filter(monkeypatch):
     build_street_network((19.0, 47.4, 19.1, 47.5), network_type="all")
 
     assert captured["custom_filter"] is None
+
+
+if __name__ == "__main__":
+    if "--write-fixture" not in sys.argv:
+        print("use --write-fixture to regenerate tests/fixtures/lane_tags.osm and .md")
+    else:
+        FIXTURE_OSM.write_text(_fixture_xml(), encoding="utf-8")
+        FIXTURE_README.write_text(_fixture_readme(), encoding="utf-8")
+        print(f"wrote {FIXTURE_OSM.name} and {FIXTURE_README.name}")
