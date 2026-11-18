@@ -823,7 +823,7 @@ requires-dist = [
     { name = "geopandas", specifier = ">=1.0.0" },
     { name = "h3", specifier = ">=4.0.0" },
     { name = "networkx", specifier = ">=3.2.0" },
-    { name = "osmnx", specifier = ">=1.9.0" },
+    { name = "osmnx", specifier = ">=2.0.7,<3" },
     { name = "pandas", specifier = ">=2.2.0" },
     { name = "pandera", extras = ["geopandas"], specifier = ">=0.20.0" },
     { name = "pyarrow", specifier = ">=15.0.0" },
