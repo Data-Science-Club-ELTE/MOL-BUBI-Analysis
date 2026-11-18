@@ -6,7 +6,6 @@ import pytest
 
 from bubi.contracts.schemas import StationsSchema
 from bubi.ingestion import ingest_futar_stations
-from bubi.network import build_street_network
 from bubi.profiling import profile_dataset
 from bubi.routing import compute_edge_weight
 from bubi.scenarios import run_all_scenarios
@@ -37,8 +36,5 @@ def test_ingestion_interface_returns_stations_table(fixtures_dir: Path):
 
 
 def test_module_stubs_raise_not_implemented():
-    with pytest.raises(NotImplementedError):
-        build_street_network((19.0, 47.4, 19.1, 47.5))
-
     with pytest.raises(NotImplementedError):
         run_all_scenarios({})
