@@ -84,6 +84,22 @@ covers the `+` edge.
 If the same way also has a `cycleway*` tag for a side, that tag wins and `:lanes` is ignored for the
 side. A bus lane can be counted if a mapper marks it `designated` for bicycles as well.
 
+## Separate cycleways
+
+When a track is mapped as its own way (`highway=cycleway`), the road beside it usually carries
+`cycleway:S=separate` or `bicycle=use_sidepath` (wiki case T1). Those tags are pointers, not lanes,
+so the road edge is `False` for that side. The cycleway edge is `True` in its own direction.
+
+The module does not match the two ways and transfer coverage. One facility has two representations,
+and the cycleway edge is the one cyclists ride. Routing uses that edge, and the lane-connectivity
+score and gap scoring read its flag. Gap scores only count edges with route volume, so a road edge
+beside a track does not appear as a gap unless a route actually uses that road edge.
+
+This is deliberate, not a gap in the rule. A geometric match (distance, bearing, overlap) has no
+consumer in the project, and it would risk counting the same track twice in lane kilometres. If
+observed GPS routes later report gaps on roads that clearly have a track beside them, the fix
+belongs in map matching, which should snap the ride to the cycleway edge.
+
 ## Which ways are downloaded
 
 Two filters matter before any tag is read:
