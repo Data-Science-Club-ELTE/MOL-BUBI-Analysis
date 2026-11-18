@@ -54,6 +54,9 @@ You can develop the tag-parsing and graph-building logic without waiting for any
 ---
 
 ## 4. Key Open Decisions (Weeks 1–2)
-- **DEM source**: Decided: Copernicus DEM GLO-30, 2021 release (`docs/decisions/dem_source.md`).
-- **Edge granularity**: Decide whether to split OSM edges where lane tags change or apply a majority rule.
+- **DEM source**: Decided: Copernicus DEM GLO-30, 2021 release (`docs/dem_source.md`).
+- **Dedicated lane rule**: Decided, see [`docs/lane_tags.md`](../../../docs/lane_tags.md). It covers
+  counted tags, direction defaults, the footway filter, and the known `oneway=-1` limitation.
+- **Edge granularity**: Decided: OSMnx splits edges where tags change, and `simplify=False` keeps one
+  OSM way per edge, so no mixed-tag majority rule is needed.
 - **Frozen graph**: Freeze graph snapshot file in `data/raw/` so edge IDs remain deterministic.
