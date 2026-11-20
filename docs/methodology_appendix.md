@@ -1,8 +1,8 @@
 # Methodology appendix
 
-Issue: methodology appendix · Module: `docs/` · Owner: Gulzina Karimova
-Status: draft for review by the Data Science MSc and the Project Leader
-State of the code described: `develop` at commit `a0c1abc` (2026-11-19)
+**Issue:** methodology appendix · Module: `docs/` · Owner: Gulzina Karimova 
+<br>**Status:** draft for review by the Data Science MSc and the Project Leader
+<br>**State of the code described:** `develop` at commit `a0c1abc` (2026-11-19)
 
 This appendix makes the project's claims checkable. It states what was assumed, what was simplified, and what the numbers do not mean. Where the design document (`bubi-technical-design.md`) describes a mitigation that the code does not yet apply, this appendix describes the code: the planned version is named only to say it is not in force.
 
