@@ -191,7 +191,7 @@ def fixture_notes(data: DashboardData) -> list[str]:
         path = data.paths[name]
         shown = path.relative_to(REPO_ROOT) if path.is_relative_to(REPO_ROOT) else path
         notes.append(
-            f"`{name}` is read from fixture-scale test data (`{shown}`), not full-city "
+            f"`{name}` is read from test data (`{shown}`), fixture-scale until #15 merges — not full-city "
             "pipeline output (until #15 merges)."
         )
     return notes
