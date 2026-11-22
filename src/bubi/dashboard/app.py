@@ -511,9 +511,7 @@ def build_scenario_summary(
             else:
                 scen_top_edges = edge_ids_of_corridors(scen_top_corridors)
             if scen_top_edges:
-                robust_count = sum(
-                    edge_labels.get(e) == LABEL_ROBUST for e in scen_top_edges
-                )
+                robust_count = sum(edge_labels.get(e) == LABEL_ROBUST for e in scen_top_edges)
                 m13_robust_share = round(robust_count / len(scen_top_edges), 3)
             else:
                 m13_robust_share = None
@@ -522,9 +520,7 @@ def build_scenario_summary(
         new_corridors_by_scenario[scenario] = corridors_absent_from_baseline(
             corridors, scenario, top_k=top_k
         )
-        rank_changes_by_scenario[scenario] = edge_rank_changes(
-            edge_scores, scenario, top_k=top_k
-        )
+        rank_changes_by_scenario[scenario] = edge_rank_changes(edge_scores, scenario, top_k=top_k)
 
         metric_rows.append(
             {
@@ -1188,9 +1184,7 @@ def build_map(
 
                     for edge_id in as_id_list(corridor["edge_ids"]):
                         if edge_id not in edges_by_id.index:
-                            notes.append(
-                                f"Corridor {cid} uses unknown edge `{edge_id}`."
-                            )
+                            notes.append(f"Corridor {cid} uses unknown edge `{edge_id}`.")
                             continue
                         folium.PolyLine(
                             offset_line(list(edges_by_id.loc[edge_id].geometry.coords)),
