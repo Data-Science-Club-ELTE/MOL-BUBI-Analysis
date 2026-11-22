@@ -762,7 +762,9 @@ def build_map(
             layer.add_to(fmap)
             legend.append((_hexagon_swatch(PROPOSED_COLOR), "Proposed station (H3 cell centre)"))
             if skipped:
-                notes.append(f"{skipped} proposed station(s) have an invalid H3 id and are not drawn.")
+                notes.append(
+                    f"{skipped} proposed station(s) have an invalid H3 id and are not drawn."
+                )
 
     if legend:
         note = []
@@ -847,11 +849,7 @@ def corridors_geojson(
                 else {"type": "MultiLineString", "coordinates": lines}
             )
         )
-        props = {
-            k: _json_safe(v)
-            for k, v in row.items()
-            if k not in {"edge_ids", "geometry"}
-        }
+        props = {k: _json_safe(v) for k, v in row.items() if k not in {"edge_ids", "geometry"}}
         props["edge_ids"] = edge_ids
         if scenario is not None and "scenario" not in props:
             props["scenario"] = scenario
