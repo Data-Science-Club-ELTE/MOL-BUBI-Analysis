@@ -1602,7 +1602,7 @@ def render_scenario_comparison(
         "robust_corridor_share_m13",
     )
     for col in per_person_cols:
-        display_df[col] = display_df[col].map(lambda v: "–" if pd.isna(v) else v)
+        display_df[col] = display_df[col].map(lambda v: "–" if pd.isna(v) else f"{v:g}")
 
     st.dataframe(display_df, hide_index=True, width="stretch")
 
