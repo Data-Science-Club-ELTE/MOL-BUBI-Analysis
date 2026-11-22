@@ -236,12 +236,7 @@ def newly_served_population_cells(
     Uses straight-line distance in EPSG:23700 (design decision D15).
     """
     empty = pd.DataFrame(columns=["cell_id", "population"])
-    if (
-        population is None
-        or population.empty
-        or proposed is None
-        or proposed.empty
-    ):
+    if population is None or population.empty or proposed is None or proposed.empty:
         return empty
 
     prop_coords = [cell_center(str(cid)) for cid in proposed["cell_id"]]
@@ -284,8 +279,7 @@ def newly_served_population_cells(
         return empty
 
     selected = [
-        {"cell_id": cell_rows[i][0], "population": cell_rows[i][1]}
-        for i in np.flatnonzero(mask)
+        {"cell_id": cell_rows[i][0], "population": cell_rows[i][1]} for i in np.flatnonzero(mask)
     ]
     return pd.DataFrame(selected)
 
@@ -457,9 +451,7 @@ def build_scenario_summary(
         for scenario in SCENARIOS:
             for _, crow in for_scenario(corridors, scenario).iterrows():
                 c_edges = set(as_id_list(crow["edge_ids"]))
-                is_rob = bool(c_edges) and all(
-                    edge_labels.get(e) == LABEL_ROBUST for e in c_edges
-                )
+                is_rob = bool(c_edges) and all(edge_labels.get(e) == LABEL_ROBUST for e in c_edges)
                 corridor_labels[(scenario, str(crow["corridor_id"]))] = (
                     LABEL_ROBUST if is_rob else LABEL_STATION_DEPENDENT
                 )
