@@ -469,7 +469,9 @@ def build_scenario_summary(
         prop = proposed_stations(data, scenario)
         scen_corridors = for_scenario(corridors, scenario)
         scen_top_corridors = (
-            scen_corridors.sort_values("rank").head(top_k) if not scen_corridors.empty else scen_corridors
+            scen_corridors.sort_values("rank").head(top_k)
+            if not scen_corridors.empty
+            else scen_corridors
         )
         scen_routes = for_scenario(routes_all, scenario)
         trips = float(scen_routes["trip_count"].sum()) if not scen_routes.empty else 0.0
