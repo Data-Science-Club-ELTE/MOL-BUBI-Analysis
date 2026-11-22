@@ -17,6 +17,9 @@ from shapely.geometry import LineString
 from streamlit.testing.v1 import AppTest
 
 from bubi.dashboard.app import (
+    DEMO_MODE_LABEL,
+    DIFF_NEW_STATION_COLOR,
+    FIXTURE_SCALE_NOTICE,
     LANE_COLOR,
     NO_LANE_COLOR,
     ROUTE_FIELDS,
@@ -26,12 +29,20 @@ from bubi.dashboard.app import (
     RouteVolumeLayer,
     Settings,
     build_map,
+    build_scenario_summary,
     compass_headings,
+    corridors_absent_from_baseline,
+    corridors_geojson,
     export_csv,
+    station_candidates_geojson,
+    write_export,
     lane_status_geojson,
     legend_html,
+    edge_rank_changes,
     map_bounds,
+    newly_served_population_cells,
     offset_line,
+    pairwise_topk_jaccard,
     route_volume_layer,
     route_volume_per_edge,
     shift_right,
@@ -611,7 +622,11 @@ def test_export_csv_writes_edge_ids_as_a_json_array(edge_ids):
 
 def test_export_csv_keeps_tables_without_edge_ids():
     table = pd.DataFrame({"cell_id": ["891e037aacfffff"], "rank": [1]})
-    assert export_csv(table) == table.to_csv(index=False).encode("utf-8")
+    exported = pd.read_csv(io.BytesIO(export_csv(table)))
+    assert exported.loc[0, "cell_id"] == "891e037aacfffff"
+    assert int(exported.loc[0, "rank"]) == 1
+    assert bool(exported.loc[0, "demo_mode"]) is True
+    assert "Synthetic demo data" in exported.loc[0, "data_label"]
 
 
 def test_missing_config_falls_back_to_defaults(tmp_path: Path):
@@ -624,3 +639,167 @@ def test_broken_config_is_reported_not_ignored(tmp_path: Path, text: str):
     path.write_text(text, encoding="utf-8")
     with pytest.raises(DashboardDataError, match="Using default settings"):
         load_config(path)
+
+
+# ---------------------------------------------------------------- week 4: exports & blocked state
+
+
+def test_corridors_geojson_has_geometry_scenario_and_demo_labels(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    corridors = for_scenario(data.get("corridors"), "baseline")
+    raw = corridors_geojson(corridors, data.get("edges"), scenario="baseline", demo_mode=True)
+    fc = json.loads(raw.decode("utf-8"))
+
+    assert fc["type"] == "FeatureCollection"
+    assert fc["properties"]["scenario"] == "baseline"
+    assert fc["properties"]["demo_mode"] is True
+    assert "Synthetic demo data" in fc["properties"]["data_label"]
+    assert len(fc["features"]) == len(corridors)
+    first = fc["features"][0]
+    assert first["geometry"]["type"] in {"LineString", "MultiLineString"}
+    assert first["properties"]["demo_mode"] is True
+    assert "Synthetic demo data" in first["properties"]["data_label"]
+
+
+def test_station_candidates_geojson_has_points_and_demo_labels(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    candidates = for_scenario(data.get("station_candidates"), "lane_aware")
+    raw = station_candidates_geojson(candidates, scenario="lane_aware", demo_mode=True)
+    fc = json.loads(raw.decode("utf-8"))
+
+    assert fc["type"] == "FeatureCollection"
+    assert len(fc["features"]) == len(candidates)
+    first = fc["features"][0]
+    assert first["geometry"]["type"] == "Point"
+    lon, lat = first["geometry"]["coordinates"]
+    assert 18.8 < lon < 19.5 and 47.3 < lat < 47.7
+    assert first["properties"]["demo_mode"] is True
+    assert DEMO_MODE_LABEL in first["properties"]["data_label"]
+
+
+def test_export_csv_includes_demo_mode_and_synthetic_label():
+    table = pd.DataFrame({"cell_id": ["891e037aacfffff"], "rank": [1]})
+    exported = pd.read_csv(io.BytesIO(export_csv(table, demo_mode=True)))
+    assert bool(exported.loc[0, "demo_mode"]) is True
+    assert "Synthetic demo data" in exported.loc[0, "data_label"]
+
+
+def test_write_export_persists_plain_file(tmp_path: Path):
+    target = write_export("corridors_baseline.geojson", b'{"type":"FeatureCollection"}', tmp_path)
+    assert target.exists()
+    assert json.loads(target.read_text(encoding="utf-8"))["type"] == "FeatureCollection"
+
+
+def test_missing_optional_table_names_file_and_producing_issue(fixture_copy: Path):
+    (fixture_copy / "sample_corridors.parquet").unlink()
+    data = load_dashboard_data(fixture_copy)
+    reason = data.missing_reason("corridors")
+    assert reason is not None
+    assert "sample_corridors.parquet" in reason
+    assert "#46" in reason
+
+
+def test_app_shows_blocked_state_notice_when_corridors_missing(monkeypatch, fixture_copy: Path):
+    (fixture_copy / "sample_corridors.parquet").unlink()
+    at = _run_app(monkeypatch, fixture_copy)
+    assert not at.exception
+    assert any("sample_corridors.parquet" in info.value and "#46" in info.value for info in at.info)
+
+
+# ---------------------------------------------------------------- week 5: scenario diff
+
+
+def test_corridors_absent_from_baseline_finds_new_corridors():
+    corridors = pd.DataFrame(
+        {
+            "scenario": ["baseline", "lane_aware", "lane_aware"],
+            "corridor_id": ["c_base", "c_same", "c_new"],
+            "edge_ids": [["e1"], ["e1"], ["e2", "e3"]],
+            "score": [100.0, 95.0, 90.0],
+            "rank": [1, 1, 2],
+        }
+    )
+    diff = corridors_absent_from_baseline(corridors, "lane_aware", top_k=10)
+    assert list(diff["corridor_id"]) == ["c_new"]
+    assert corridors_absent_from_baseline(corridors, "baseline", top_k=10).empty
+
+
+def test_newly_served_population_cells_excludes_existing_station_radius():
+    stations = pd.DataFrame(
+        {"station_id": ["s1"], "name": ["Existing"], "lat": [47.4979], "lon": [19.0541]}
+    )
+    existing_cell = h3.latlng_to_cell(47.4979, 19.0541, 9)
+    far_cell = h3.latlng_to_cell(47.5200, 19.0800, 9)
+    population = pd.DataFrame({"cell_id": [existing_cell, far_cell], "population": [500.0, 800.0]})
+    proposed = pd.DataFrame(
+        {
+            "scenario": ["lane_aware", "lane_aware"],
+            "cell_id": [existing_cell, far_cell],
+            "population": [500.0, 800.0],
+            "lane_connectivity": [1.0, 1.0],
+            "score": [10.0, 20.0],
+            "rank": [1, 2],
+        }
+    )
+
+    newly = newly_served_population_cells(population, stations, proposed, walk_coverage_m=350.0)
+    assert list(newly["cell_id"]) == [far_cell]
+    assert float(newly["population"].sum()) == 800.0
+
+
+def test_edge_rank_changes_detects_improved_worsened_and_new_topk():
+    edge_scores = pd.DataFrame(
+        {
+            "scenario": ["baseline", "baseline", "lane_aware", "lane_aware", "lane_aware"],
+            "edge_id": ["e1", "e2", "e1", "e2", "e3"],
+            "volume": [10.0, 10.0, 10.0, 10.0, 10.0],
+            "score": [10.0, 8.0, 7.0, 12.0, 9.0],
+            "rank": [1, 3, 4, 1, 2],
+        }
+    )
+    changes = edge_rank_changes(edge_scores, "lane_aware", top_k=3).set_index("edge_id")
+    assert changes.loc["e2", "change_type"] == "improved"
+    assert changes.loc["e3", "change_type"] == "new_top_k"
+
+
+def test_pairwise_topk_jaccard_computes_m14(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    jaccard = pairwise_topk_jaccard(data.get("edge_scores"), data.get("corridors"), top_k=10)
+    assert len(jaccard) == 3
+    assert ((jaccard["jaccard_overlap_m14"] >= 0.0) & (jaccard["jaccard_overlap_m14"] <= 1.0)).all()
+
+
+def test_build_scenario_summary_and_diff_map_layers(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    summary = build_scenario_summary(data, top_k=10)
+    assert set(summary.metrics_table["scenario"]) == {"baseline", "lane_aware", "population_only"}
+    assert "newly_served_pop_m1" in summary.metrics_table.columns
+    assert "demand_per_newly_served_m11" in summary.metrics_table.columns
+
+    diff_settings = replace(ALL_LAYERS, scenario="lane_aware", show_diff=True)
+    fmap, _ = build_map(data, diff_settings, summary=summary)
+    html = fmap.get_root().render()
+    assert DIFF_NEW_STATION_COLOR in html
+    assert "new: proposed" in html
+
+
+def test_app_difference_toggle_and_fixture_notice(monkeypatch, fixtures_dir: Path):
+    at = _run_app(monkeypatch, fixtures_dir)
+    assert not at.exception
+    assert any(FIXTURE_SCALE_NOTICE in info.value for info in at.info)
+
+    # Disabled on baseline
+    diff_box = next(
+        box for box in at.sidebar.checkbox if box.label == "Show difference vs baseline"
+    )
+    assert diff_box.disabled is True
+
+    # Enabled when switching to lane_aware, and runs cleanly when checked
+    at.sidebar.radio[0].set_value("lane_aware").run()
+    diff_box = next(
+        box for box in at.sidebar.checkbox if box.label == "Show difference vs baseline"
+    )
+    assert diff_box.disabled is False
+    diff_box.check().run()
+    assert not at.exception
+    assert any("prepared on the server in" in c.value for c in at.caption)
