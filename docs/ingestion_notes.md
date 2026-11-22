@@ -112,8 +112,8 @@ This runs `scripts/run_pipeline.py`. The script runs these stages in order: `sta
 | Status | Meaning |
 |---|---|
 | `DONE` | The stage ran and its output validated. The detail says `written` or `unchanged`. |
-| `EXISTING` | The module is not implemented yet, but a valid output file is already on disk; later stages use it. |
-| `BLOCKED` | The module is not implemented yet, or an input comes from a blocked stage. The detail names the owning issue. |
+| `EXISTING` | The pipeline does not build this table (its module is not implemented yet, or a separate script builds it), but a valid output file is already on disk; later stages use it. The detail names the issue or the script. |
+| `BLOCKED` | The stage cannot run yet, a separately built table is not on disk, or an input comes from a blocked stage. The detail names the owning issue or the script that builds the table. |
 | `FAILED` | An input is missing or invalid, or the stage raised an error. The detail names the stage and the file. The run stops and the command exits with 1. |
 | `NOT_RUN` | An earlier stage failed. |
 
@@ -142,11 +142,35 @@ corridors   BLOCKED   data/processed/corridors.parquet  upstream: edges (#15), s
 - `routes` waits on the edges table (#15), not on its own module: route generation (#36) is merged.
 - `scores` (#21) and `corridors` (#37) are implemented and wait only on their inputs.
 
-Since this run, #15 produced the first real edges table. `scripts/build_network.py` built
+#### Run with the frozen edges table (#94)
+
+Since the run above, #15 produced the first real edges table. `scripts/build_network.py` built
 `data/processed/edges.parquet` from the 2026-11-21 Geofabrik extract: 744,298 directed edges,
-369,755 bike-graph nodes, and 4.1% of edges carrying a dedicated lane. A fresh pipeline run now
-reports `edges` as `EXISTING` from that file; the stage has no runner of its own, and `routes`
-still waits on its wiring.
+369,755 bike-graph nodes, and 4.1% of edges carrying a dedicated lane. The network build needs
+`osmium` and the raw PBF (Protocolbuffer Binary Format) extract, so it stays a separate script; the
+`edges` stage only validates the committed file and names that script.
+
+Result on 2026-11-22 (commit `16b2782` plus the #94 change), with both raw files restored (§10.2),
+second of two runs:
+
+```text
+stations    DONE      data/processed/stations.parquet  704 rows, unchanged
+population  DONE      data/processed/population.parquet  8155 rows, unchanged
+edges       EXISTING  data/processed/edges.parquet  built by scripts/build_network.py; using existing file (744298 rows)
+candidates  BLOCKED   data/processed/station_candidates.parquet  module not implemented yet, owned by #39
+trips       DONE      data/processed/trip_matrix.parquet  126380 rows, unchanged
+routes      BLOCKED   data/processed/routes.parquet  edges have no grade yet, owned by #31
+volumes     BLOCKED   data/processed/edge_volumes.parquet  upstream: routes (#31)
+scores      BLOCKED   data/processed/edge_scores.parquet  upstream: volumes (via routes (#31))
+corridors   BLOCKED   data/processed/corridors.parquet  upstream: scores (via volumes (via routes (#31)))
+```
+
+- No stage failed, and the second run left every file unchanged.
+- On the first run `trips` reported `written`: 5,126 of the 126,380 `trip_count` values differed
+  from the committed copy by at most 6.7e-16 (floating-point rounding), with the same rows and the
+  same total. The committed `trip_matrix.parquet` was kept.
+- `routes` now waits on per-edge grades (#31): the frozen edges table has no `grade` column yet,
+  and the router's uphill penalty needs it. `scores` and `corridors` no longer wait on `edges`.
 
 `tests/test_run_pipeline.py` covers the same stages with a small generated raster and the sample edges and routes fixtures, and checks that a second run rewrites nothing. List cells, such as `corridors.edge_ids`, come back from Parquet as NumPy arrays, so the "unchanged" check compares them as tuples.
 

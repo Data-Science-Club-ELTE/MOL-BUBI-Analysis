@@ -4,10 +4,11 @@
 Stages run in dependency order. Each stage either:
 - DONE: ran, validated its output through ``bubi.contracts.io`` and wrote it (or found
   the existing file identical and left it untouched);
-- EXISTING: its module is not implemented yet, but a valid output file is already on
-  disk, so later stages can use it;
-- BLOCKED: its module is not implemented yet (owning issue named), or an input comes
-  from a blocked stage;
+- EXISTING: the pipeline does not build it (its module is not implemented yet, or a
+  separate script builds it), but a valid output file is already on disk, so later
+  stages can use it;
+- BLOCKED: it cannot run yet (owning issue named), its separately built output is not
+  on disk, or an input comes from a blocked stage;
 - FAILED: an input is missing or invalid, or the stage raised; the run stops here;
 - NOT_RUN: a previous stage failed.
 
@@ -63,7 +64,9 @@ class Stage:
     output: str
     schema: str  # contract table name in bubi.contracts.io.SCHEMA_REGISTRY
     run: Runner | None = None
-    blocked_by: str | None = None  # owning issue while the module is not implemented
+    blocked_by: str | None = None  # owning issue while the stage cannot run
+    reason: str = "module not implemented yet"  # why it cannot run, shown with blocked_by
+    built_by: str | None = None  # script that builds the output outside the pipeline
     # Validate only these schema columns, for intermediate tables that hold part of a
     # contract table (edge volumes are the first three columns of edge_scores).
     columns: tuple[str, ...] | None = None
@@ -143,7 +146,7 @@ def build_stages(config: dict) -> list[Stage]:
     routes = f"{PROCESSED}/routes.parquet"
     volumes = f"{PROCESSED}/edge_volumes.parquet"
     scores = f"{PROCESSED}/edge_scores.parquet"
-    # Edges have no declared raw input yet: the network build is still open in #15.
+    # The network build needs osmium and the raw PBF, so it stays a separate script (#15).
     return [
         Stage(
             "stations",
@@ -159,7 +162,7 @@ def build_stages(config: dict) -> list[Stage]:
             "population",
             run=_run_population,
         ),
-        Stage("edges", (), edges, "edges", blocked_by="#15"),
+        Stage("edges", (), edges, "edges", built_by="scripts/build_network.py"),
         Stage(
             "candidates",
             (stations, population, edges),
@@ -168,7 +171,14 @@ def build_stages(config: dict) -> list[Stage]:
             blocked_by="#39",
         ),
         Stage("trips", (stations, population), trips, "trip_matrix", run=_run_trips),
-        Stage("routes", (trips, edges), routes, "routes", blocked_by="#15"),
+        Stage(
+            "routes",
+            (trips, edges),
+            routes,
+            "routes",
+            blocked_by="#31",
+            reason="edges have no grade yet",
+        ),
         Stage(
             "volumes",
             (routes,),
@@ -242,8 +252,8 @@ def run_pipeline(root: Path, config: dict) -> list[StageResult]:
 
 def _blocked_label(stage: Stage, producer: dict[str, Stage], unavailable: set[str]) -> str:
     """Name a blocked stage and, through its blocked inputs, the issue it waits on."""
-    if stage.blocked_by:
-        return f"{stage.name} ({stage.blocked_by})"
+    if stage.blocked_by or stage.built_by:
+        return f"{stage.name} ({stage.blocked_by or stage.built_by})"
     upstream = ", ".join(
         _blocked_label(producer[path], producer, unavailable)
         for path in stage.inputs
@@ -253,16 +263,20 @@ def _blocked_label(stage: Stage, producer: dict[str, Stage], unavailable: set[st
 
 
 def _use_existing_output(stage: Stage, output: Path) -> StageResult:
-    """Handle a stage whose module is not implemented yet."""
+    """Handle a stage the pipeline does not build itself."""
     if not output.exists():
-        detail = f"module not implemented yet, owned by {stage.blocked_by}"
+        if stage.built_by:
+            detail = f"not on disk; build it with {stage.built_by}"
+        else:
+            detail = f"{stage.reason}, owned by {stage.blocked_by}"
         return StageResult(stage.name, BLOCKED, stage.output, detail)
     try:
         df = _validate(stage, _read(stage, output))
     except STAGE_ERRORS as exc:
         detail = f"existing {stage.output} is invalid: {type(exc).__name__}: {exc}"
         return StageResult(stage.name, FAILED, stage.output, detail)
-    detail = f"module blocked by {stage.blocked_by}; using existing file ({len(df)} rows)"
+    source = f"built by {stage.built_by}" if stage.built_by else f"blocked by {stage.blocked_by}"
+    detail = f"{source}; using existing file ({len(df)} rows)"
     return StageResult(stage.name, EXISTING, stage.output, detail)
 
 

@@ -169,15 +169,35 @@ def test_blocked_stages_name_their_owning_issue(tmp_path, config):
 
     for stage in ("stations", "population", "trips"):
         assert results[stage].status == rp.DONE
-    owners = {"edges": "#15", "candidates": "#39", "routes": "#15"}
+    owners = {"candidates": "#39", "routes": "#31"}
     for stage, issue in owners.items():
         assert results[stage].status == rp.BLOCKED
         assert issue in results[stage].detail
-    assert results["volumes"].detail == "upstream: routes (#15)"
+    assert results["routes"].detail == "edges have no grade yet, owned by #31"
+    assert results["edges"].status == rp.BLOCKED
+    assert results["edges"].detail == "not on disk; build it with scripts/build_network.py"
+    assert "#15" not in " ".join(r.detail for r in results.values())
+    assert results["volumes"].detail == "upstream: routes (#31)"
     # Scores and corridors are implemented (#21, #37) and wait only on their inputs.
-    assert results["scores"].detail == "upstream: edges (#15), volumes (via routes (#15))"
-    assert results["corridors"].detail.startswith("upstream: edges (#15), scores (via ")
+    network = "edges (scripts/build_network.py)"
+    assert results["scores"].detail == f"upstream: {network}, volumes (via routes (#31))"
+    assert results["corridors"].detail.startswith(f"upstream: {network}, scores (via ")
     assert not any(r.status == rp.FAILED for r in results.values())
+
+
+def test_existing_edges_name_the_network_script(tmp_path, config):
+    _with_raw_inputs(tmp_path)
+    _place(tmp_path, "sample_edges.parquet", "edges")
+
+    results = _by_stage(rp.run_pipeline(tmp_path, config))
+
+    edges = results["edges"]
+    assert edges.status == rp.EXISTING
+    assert edges.detail.startswith("built by scripts/build_network.py; using existing file")
+    assert results["routes"].status == rp.BLOCKED
+    assert results["volumes"].detail == "upstream: routes (#31)"
+    assert results["scores"].detail == "upstream: volumes (via routes (#31))"
+    assert results["corridors"].detail == "upstream: scores (via volumes (via routes (#31)))"
 
 
 def test_implemented_stages_run_and_validate_on_existing_inputs(tmp_path, config):
