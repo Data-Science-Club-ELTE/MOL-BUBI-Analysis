@@ -655,7 +655,9 @@ def build_map(
             layer.add_to(fmap)
             legend.append((_area_swatch(POPULATION_COLOR), "Population (darker = more people)"))
             if skipped:
-                notes.append(f"{skipped} population cell(s) have an invalid H3 id and are not drawn.")
+                notes.append(
+                    f"{skipped} population cell(s) have an invalid H3 id and are not drawn."
+                )
 
     if settings.show_lanes and not edges.empty:
         geojson = lane_geojson if lane_geojson is not None else lane_status_geojson(edges)
