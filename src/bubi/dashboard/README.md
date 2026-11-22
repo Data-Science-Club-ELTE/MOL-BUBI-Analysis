@@ -145,6 +145,9 @@ page for only 20,000 edges.
 - Corridors and population cells are still drawn one object each. That is fine for the top
   corridors, but the population layer may need the same treatment at city scale. Routes are
   handled in week 3 (section 6).
+- Lane status mirrors the OSM tags. Missing or stale tags can hide a lane or claim one that is not
+  there, so check every suggested new lane against recent satellite imagery and a site visit before
+  it enters a plan.
 
 ---
 

@@ -134,6 +134,21 @@ from the source file and swaps `cycleway:left` with `cycleway:right`, and the `:
 variants, before evaluating the lane. This needs the local extract: OSMnx discards the raw value,
 so the Overpass download path cannot recover it.
 
+## OSM data quality
+
+The lane flag is only as good as the tags behind it. A missing `cycleway` tag hides a lane that exists,
+a stale tag claims one that does not, and a crossing mapped as `highway=footway` with
+`bicycle=dismount` breaks the line at a junction even when paint continues.
+
+The Soroksári út / Kvassay Jenő út junction is an example. The two separate cycleway ways,
+`60472279` and `59313979`, end 32 m apart, and only footways tagged `bicycle=dismount` connect
+them. The bike filter drops those footways, so the dashboard shows a gap that matches OSM but not
+the paint on the ground.
+
+We do not edit OSM. Treat the dashboard as evidence for where to look, not as a replacement for
+verification, and check every suggested new lane against recent satellite imagery and a site visit
+before it enters a plan.
+
 ## Tests
 
 `tests/test_network_lane_tags.py` covers every tagging combination on the wiki page, including the
