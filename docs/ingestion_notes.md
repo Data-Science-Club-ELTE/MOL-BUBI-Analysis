@@ -142,6 +142,12 @@ corridors   BLOCKED   data/processed/corridors.parquet  upstream: edges (#15), s
 - `routes` waits on the edges table (#15), not on its own module: route generation (#36) is merged.
 - `scores` (#21) and `corridors` (#37) are implemented and wait only on their inputs.
 
+Since this run, #15 produced the first real edges table. `scripts/build_network.py` built
+`data/processed/edges.parquet` from the 2026-11-21 Geofabrik extract: 744,298 directed edges,
+369,755 bike-graph nodes, and 4.1% of edges carrying a dedicated lane. A fresh pipeline run now
+reports `edges` as `EXISTING` from that file; the stage has no runner of its own, and `routes`
+still waits on its wiring.
+
 `tests/test_run_pipeline.py` covers the same stages with a small generated raster and the sample edges and routes fixtures, and checks that a second run rewrites nothing. List cells, such as `corridors.edge_ids`, come back from Parquet as NumPy arrays, so the "unchanged" check compares them as tuples.
 
 ### 10.5 Reproducibility check

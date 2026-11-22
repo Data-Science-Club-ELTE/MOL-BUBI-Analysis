@@ -14,9 +14,9 @@ cases contain no two-way flag that the wiki does not have.
 
 Every case also runs through OSMnx's XML parser (test_osm_xml_lane_tags),
 which is the only way to catch its boolean oneway, node order, and tag
-filtering. oneway=-1 is characterised, not fixed: OSMnx reverses the node
-order and drops the raw value, so a side lane can end up on the traffic edge
-or its mirror (see test_osm_xml_oneway_minus_one).
+filtering. For oneway=-1 the parser reads the raw value back from the source
+file and swaps left/right before evaluating the lane, because OSMnx reverses
+the node order and drops the string (see test_osm_xml_reversed_oneway).
 """
 
 import sys
@@ -32,8 +32,11 @@ from bubi.contracts.schemas import EdgesSchema
 from bubi.network.graph import (
     REQUIRED_WAY_TAGS,
     _has_dedicated_lane,
+    _reversed_way_ids,
     build_street_network,
+    build_walk_network,
     extract_per_direction_edges,
+    load_osm_graph,
     postprocess_graph,
 )
 
@@ -931,33 +934,88 @@ def test_osm_xml_lane_tags(case, fixture_flags):
     )
 
 
-# oneway=-1: OSMnx reverses the node order, so the edge with traffic is 2->1
-# and shows up as "-" in this file's node convention. The left/right tags stay
-# relative to the drawn way.
+# OSMnx reverses the node order for oneway=-1/reverse/T, so the traffic edge is
+# 2->1 and shows up as "-" in this file's node convention. The side tags stay
+# relative to the drawn way, so the test reads the raw values back and the
+# parser swaps left/right before evaluating the lane.
 XML_ONEWAY_CASES = [
     {
         "id": "oneway-minus1-right-lane",
         "ways": [{"oneway": "-1", "cycleway:right": "lane"}],
+        # A lane on either side of a one-way way serves the traffic direction.
         "expect": {(0, "-"): True},
     },
     {
         "id": "oneway-minus1-bicycle-no-left-lane",
         "ways": [{"oneway": "-1", "oneway:bicycle": "no", "cycleway:left": "lane"}],
-        # Observed, and known to be wrong: OSMnx reverses the node order and
-        # drops the raw -1, so the traffic edge loses the lane and the added
-        # contraflow edge gets it. The raw tag is not recoverable here.
-        "expect": {(0, "+"): True, (0, "-"): False},
+        # Drawn left is traffic right, so the lane belongs to the traffic edge.
+        "expect": {(0, "-"): True, (0, "+"): False},
+    },
+    {
+        "id": "oneway-minus1-bicycle-no-right-lane",
+        "ways": [{"oneway": "-1", "oneway:bicycle": "no", "cycleway:right": "lane"}],
+        # Drawn right is traffic left, so the lane belongs to the contraflow edge.
+        "expect": {(0, "-"): False, (0, "+"): True},
+    },
+    {
+        "id": "oneway-reverse-bicycle-no-left-lane",
+        "ways": [{"oneway": "reverse", "oneway:bicycle": "no", "cycleway:left": "lane"}],
+        "expect": {(0, "-"): True, (0, "+"): False},
     },
 ]
 
 
 @pytest.mark.parametrize("case", XML_ONEWAY_CASES, ids=[case["id"] for case in XML_ONEWAY_CASES])
-def test_osm_xml_oneway_minus_one(case, tmp_path):
-    """Characterises oneway=-1; left/right is not remapped to traffic direction."""
-    graph = _load_xml(_write_xml(case["ways"], tmp_path))
-    _, edges = postprocess_graph(graph)
+def test_osm_xml_reversed_oneway(case, tmp_path):
+    """The source file's oneway=-1/reverse swaps left/right after OSMnx flips."""
+    path = _write_xml(case["ways"], tmp_path)
+    graph = _load_xml(path)
+    _, edges = postprocess_graph(graph, reversed_way_ids=_reversed_way_ids(path))
     flags = _flags(edges, len(case["ways"]))
     assert flags == case["expect"], f"{case['id']}: got {flags}"
+
+
+def test_load_osm_graph_rejects_pbf(tmp_path):
+    with pytest.raises(ValueError, match="not OSM XML"):
+        load_osm_graph(tmp_path / "hungary-latest.osm.pbf")
+
+
+def test_build_from_local_source_skips_download(tmp_path, monkeypatch):
+    path = _write_xml([{"cycleway": "lane"}], tmp_path)
+    monkeypatch.setattr(
+        "osmnx.graph.graph_from_bbox",
+        lambda **_: pytest.fail("local source must not download"),
+    )
+    _, edges = build_street_network((18.99, 47.44, 19.01, 47.46), source_path=path)
+    assert len(edges) == 2
+
+
+def test_local_source_applies_bike_filter(tmp_path):
+    path = _write_xml(
+        [
+            {"highway": "motorway"},
+            {"highway": "residential"},
+            {"highway": "footway"},
+            {"highway": "footway", "bicycle": "designated"},
+        ],
+        tmp_path,
+    )
+    _, edges = build_street_network((18.99, 47.43, 19.02, 47.49), source_path=path)
+    assert set(edges["osm_way_id"]) == {1001, 1003}
+
+
+def test_local_source_applies_walk_filter(tmp_path):
+    path = _write_xml(
+        [
+            {"highway": "motorway"},
+            {"highway": "footway"},
+            {"highway": "cycleway"},
+            {"highway": "steps"},
+        ],
+        tmp_path,
+    )
+    graph = build_walk_network((18.99, 47.43, 19.02, 47.49), source_path=path)
+    assert {data["osmid"] for _, _, data in graph.edges(data=True)} == {1001, 1003}
 
 
 class _RecordingEdge:
