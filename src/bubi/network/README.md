@@ -33,7 +33,8 @@ GeoParquet file saved to `data/processed/edges.parquet` (tested against `tests/f
 
 ### Frozen network artefacts
 
-The build reads a Geofabrik PBF from the project Drive. Nothing under `data/raw/` is committed.
+The build reads a Geofabrik PBF from the project Drive and needs `osmium-tool` on `PATH`. Nothing
+under `data/raw/` is committed.
 
 ```bash
 .venv/bin/python scripts/build_network.py --pbf data/raw/hungary-261121.osm.pbf
