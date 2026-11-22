@@ -1,0 +1,39 @@
+{
+  "frozen_graph_version": "budapest_osm_20261121",
+  "osm_extract_date": "2026-11-21",
+  "osmnx_version": "2.1.1",
+  "bbox": [
+    18.92,
+    47.35,
+    19.33,
+    47.61
+  ],
+  "pbf": {
+    "file": "hungary-261121.osm.pbf",
+    "sha256": "2b1af295ae2294834dcf22fee12a80345951c72d067a389f876743a6c93940ba"
+  },
+  "networks": {
+    "bike": {
+      "file": "data/raw/budapest_osm_20261121-bike.graphml.gz",
+      "sha256": "3cf0998f503d5783c912c764466a17d9670c2db9039d717ff9f479876a5e4256",
+      "bytes": 22859162,
+      "nodes": 369755,
+      "edges": 744298,
+      "crs": "epsg:4326"
+    },
+    "walk": {
+      "file": "data/raw/budapest_osm_20261121-walk.graphml.gz",
+      "sha256": "86841a4f16b8f7ac8dcb8c8d24c4b97158001cc0525c1d53c7d4ee81daad1b02",
+      "bytes": 29462383,
+      "nodes": 465555,
+      "edges": 1036206,
+      "crs": "epsg:4326"
+    }
+  },
+  "edges": {
+    "file": "data/processed/edges.parquet",
+    "rows": 744298,
+    "dedicated_lane_share": 0.041,
+    "sha256": "f5b1bfaaf34462a6e2531fc121db944b3c1f16fc58502949a359fef45b10e3c2"
+  }
+}

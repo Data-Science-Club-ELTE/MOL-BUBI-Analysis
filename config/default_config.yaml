@@ -12,7 +12,11 @@ spatial:
   study_area_bbox: [18.92, 47.35, 19.33, 47.61] # [min_lon, min_lat, max_lon, max_lat] Budapest
 
 network:
-  frozen_graph_version: "budapest_osm_2026w1"
+  frozen_graph_version: "budapest_osm_20261121"
+  osm_extract_date: "2026-11-21"
+  bike_graph_file: "data/raw/budapest_osm_20261121-bike.graphml.gz"
+  walk_graph_file: "data/raw/budapest_osm_20261121-walk.graphml.gz"
+  network_metadata_file: "data/processed/network_metadata.json"
   network_type: "bike"
   walking_network_type: "walk"
   elevation_dem_source: "copernicus_glo30_2021"  # docs/decisions/dem_source.md

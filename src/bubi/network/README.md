@@ -31,6 +31,26 @@ GeoParquet file saved to `data/processed/edges.parquet` (tested against `tests/f
 | `has_dedicated_lane` | `bool` | True if dedicated lane exists in this direction |
 | `geometry` | `LineString` | LineString in EPSG:4326 |
 
+### Frozen network artefacts
+
+The build reads a Geofabrik PBF from the project Drive. Nothing under `data/raw/` is committed.
+
+```bash
+.venv/bin/python scripts/build_network.py --pbf data/raw/hungary-261121.osm.pbf
+```
+
+It clips the PBF to `spatial.study_area_bbox`, keeps ways with a `highway` tag, and writes:
+
+| Artefact | Path | Committed |
+|---|---|---|
+| Bike graph | `data/raw/budapest_osm_20261121-bike.graphml.gz` | no, in the project Drive |
+| Walk graph | `data/raw/budapest_osm_20261121-walk.graphml.gz` | no, in the project Drive |
+| Edges table | `data/processed/edges.parquet` | yes |
+| Provenance | `data/processed/network_metadata.json` | yes |
+
+The current freeze is `budapest_osm_20261121`, extract date 2026-11-21. The metadata records the
+PBF SHA-256, both graph SHA-256 values, node and edge counts, and the dedicated-lane share.
+
 ---
 
 ## 3. How to Develop Independently
