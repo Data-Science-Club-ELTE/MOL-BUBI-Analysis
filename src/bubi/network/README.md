@@ -7,7 +7,8 @@
 
 ## 1. Objective
 
-1. Download Budapest street and walking networks using `OSMnx`.
+1. Load Budapest street and walking networks from the clipped Geofabrik extract, with an OSMnx
+   download as fallback.
 2. Extract **per-direction** dedicated bike-lane status:
    - Handle tags relative to way direction (`cycleway:left/right`, `cycleway=lane|track`, `oneway:bicycle`).
    - Identify parallel cycleways.
@@ -56,7 +57,8 @@ You can develop the tag-parsing and graph-building logic without waiting for any
 ## 4. Key Open Decisions (Weeks 1–2)
 - **DEM source**: Decided: Copernicus DEM GLO-30, 2021 release (`docs/dem_source.md`).
 - **Dedicated lane rule**: Decided, see [`docs/lane_tags.md`](../../../docs/lane_tags.md). It covers
-  counted tags, direction defaults, the footway filter, and the known `oneway=-1` limitation.
+  counted tags, direction defaults, the footway filter, and the `oneway=-1` side swap.
 - **Edge granularity**: Decided: OSMnx splits edges where tags change, and `simplify=False` keeps one
   OSM way per edge, so no mixed-tag majority rule is needed.
-- **Frozen graph**: Freeze graph snapshot file in `data/raw/` so edge IDs remain deterministic.
+- **Frozen graph**: The clipped OSM extract and the frozen graph live in the project Drive, not in
+  git (`data/raw/` is ignored). Edge IDs stay deterministic because the extract is fixed.

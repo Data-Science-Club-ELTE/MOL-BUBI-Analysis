@@ -1,5 +1,7 @@
 """OSM Street & Walking network extraction and per-direction bike-lane model."""
 
+import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
@@ -7,7 +9,7 @@ import geopandas as gpd
 import networkx as nx
 import osmnx as ox
 import pandas as pd
-from shapely.geometry import LineString, MultiLineString
+from shapely.geometry import LineString, MultiLineString, box
 from shapely.geometry.base import BaseGeometry
 
 REQUIRED_WAY_TAGS = (
@@ -26,6 +28,95 @@ REQUIRED_WAY_TAGS = (
     "oneway:bicycle",
 )
 DESIGNATED_FOOTWAY_FILTER = '["highway"="footway"]["bicycle"="designated"]'
+# Values OSMnx reverses the node order for, see OSMnx `_is_path_reversed`.
+REVERSED_ONEWAY_VALUES = {"-1", "reverse", "T"}
+SIDE_TAG_PAIRS = (
+    ("cycleway:left", "cycleway:right"),
+    ("cycleway:left:oneway", "cycleway:right:oneway"),
+)
+# Tags the local-file network filter reads. They are not needed for the
+# Overpass path, which filters server-side.
+FILTER_WAY_TAGS = (
+    "foot",
+    "sidewalk",
+    "sidewalk:both",
+    "sidewalk:left",
+    "sidewalk:right",
+)
+# Same exclusions as OSMnx's Overpass presets, applied here because a local
+# extract arrives unfiltered.
+BIKE_HIGHWAY_EXCLUDED = re.compile(
+    r"abandoned|bus_guideway|construction|corridor|elevator|escalator|footway|motor|no|"
+    r"planned|platform|proposed|raceway|razed|rest_area|services|steps"
+)
+WALK_HIGHWAY_EXCLUDED = re.compile(
+    r"abandoned|bus_guideway|construction|cycleway|motor|no|planned|platform|"
+    r"proposed|raceway|razed|rest_area|services"
+)
+WALK_SEPARATE_SIDEWALKS = ("sidewalk", "sidewalk:both", "sidewalk:left", "sidewalk:right")
+
+
+def _keep_way(data: dict, network_type: str, include_designated_footways: bool) -> bool:
+    """Whether a way belongs to the requested OSMnx network preset."""
+    highway = _dict_tag(data, "highway")
+    if not highway:
+        return False
+
+    if network_type == "bike":
+        is_designated_footway = (
+            include_designated_footways
+            and highway == "footway"
+            and _dict_tag(data, "bicycle") == "designated"
+        )
+        if is_designated_footway:
+            return True
+        return not (
+            BIKE_HIGHWAY_EXCLUDED.search(highway)
+            or _dict_tag(data, "area") == "yes"
+            or _dict_tag(data, "access") == "private"
+            or _dict_tag(data, "bicycle") == "no"
+            or _dict_tag(data, "service") == "private"
+        )
+
+    if network_type == "walk":
+        return not (
+            WALK_HIGHWAY_EXCLUDED.search(highway)
+            or _dict_tag(data, "area") == "yes"
+            or _dict_tag(data, "access") == "private"
+            or _dict_tag(data, "foot") == "no"
+            or _dict_tag(data, "service") == "private"
+            or any(_dict_tag(data, key) == "separate" for key in WALK_SEPARATE_SIDEWALKS)
+        )
+
+    raise ValueError(f"Unsupported network_type for a local extract: {network_type}")
+
+
+def _filter_graph_to_network(
+    graph: nx.MultiDiGraph,
+    network_type: str,
+    include_designated_footways: bool = True,
+) -> nx.MultiDiGraph:
+    """Drop ways outside the requested preset after reading a local extract."""
+    drop = [
+        (u, v, key)
+        for u, v, key, data in graph.edges(keys=True, data=True)
+        if not _keep_way(data, network_type, include_designated_footways)
+    ]
+    graph.remove_edges_from(drop)
+    graph.remove_nodes_from(list(nx.isolates(graph)))
+    return graph
+
+
+def _local_network(
+    path: Path,
+    bbox: tuple[float, float, float, float],
+    network_type: str,
+    include_designated_footways: bool = True,
+) -> nx.MultiDiGraph:
+    """Load, filter and clip a local extract in one step."""
+    graph = load_osm_graph(path, network_type=network_type)
+    graph = _filter_graph_to_network(graph, network_type, include_designated_footways)
+    return ox.truncate.truncate_graph_polygon(graph, box(*bbox))
 
 
 def build_street_network(
@@ -33,8 +124,9 @@ def build_street_network(
     network_type: str = "bike",
     elevation_dem_path: Optional[Path] = None,
     include_designated_footways: bool = True,
+    source_path: Optional[Path] = None,
 ) -> tuple[nx.MultiDiGraph, gpd.GeoDataFrame]:
-    """Download Budapest street network via OSMnx and build per-direction lane model.
+    """Build the Budapest street network and its per-direction lane model.
 
     Args:
         bbox: (min_lon, min_lat, max_lon, max_lat)
@@ -42,10 +134,21 @@ def build_street_network(
         elevation_dem_path: Optional path to elevation raster (DEM) to add grades.
         include_designated_footways: Keep highway=footway + bicycle=designated
             ways in the bike network, where OSMnx's bike filter drops them.
+        source_path: Local OSM XML extract to read instead of downloading.
+            Supported for network_type="bike"; use build_walk_network for the
+            walking graph. OSMnx cannot read PBF, so clip the Geofabrik
+            extract with `osmium` first.
 
     Returns:
         Tuple of (NetworkX directed graph, GeoDataFrame adhering to EdgesSchema).
     """
+
+    if source_path is not None:
+        if network_type != "bike":
+            raise ValueError("source_path is supported for network_type='bike' only")
+        path = Path(source_path)
+        graph = _local_network(path, bbox, network_type, include_designated_footways)
+        return postprocess_graph(graph, reversed_way_ids=_reversed_way_ids(path))
 
     custom_filter = None
     if network_type == "bike" and include_designated_footways:
@@ -71,10 +174,94 @@ def build_street_network(
     return postprocess_graph(G)
 
 
+def build_walk_network(
+    bbox: tuple[float, float, float, float],
+    source_path: Optional[Path] = None,
+) -> nx.MultiDiGraph:
+    """Build the walking network, preferring a local extract over a download."""
+    if source_path is not None:
+        return _local_network(Path(source_path), bbox, "walk")
+
+    return ox.graph.graph_from_bbox(
+        bbox=bbox,
+        network_type="walk",
+        simplify=False,
+        retain_all=True,
+    )
+
+
+def load_osm_graph(path: Path, network_type: str = "bike") -> nx.MultiDiGraph:
+    """Read a local OSM XML extract with the tags the network filters need."""
+    if path.suffix.lower() not in {".osm", ".xml"}:
+        raise ValueError(
+            f"{path} is not OSM XML. OSMnx cannot read PBF; clip the Geofabrik "
+            "extract with `osmium extract --bbox ... -o extract.osm` first."
+        )
+
+    extra_tags = (*REQUIRED_WAY_TAGS, *FILTER_WAY_TAGS)
+    original_tags = ox.settings.useful_tags_way
+    ox.settings.useful_tags_way = list(dict.fromkeys([*original_tags, *extra_tags]))
+    try:
+        return ox.graph.graph_from_xml(
+            str(path),
+            bidirectional=network_type == "walk",
+            simplify=False,
+            retain_all=True,
+        )
+    finally:
+        ox.settings.useful_tags_way = original_tags
+
+
+def _reversed_way_ids(path: Path) -> set[int]:
+    """Way ids whose node order OSMnx flips (`oneway=-1`, `reverse`, `T`)."""
+    way_ids: set[int] = set()
+    for _, element in ET.iterparse(str(path), events=("end",)):
+        if element.tag == "way":
+            oneway = next(
+                (tag.get("v", "") for tag in element.findall("tag") if tag.get("k") == "oneway"),
+                "",
+            )
+            if oneway.strip() in REVERSED_ONEWAY_VALUES:
+                way_ids.add(int(element.get("id")))
+            element.clear()
+        elif element.tag in {"node", "relation"}:
+            # Keep tag children until their parent is read, then free them.
+            element.clear()
+    return way_ids
+
+
+def _remap_way_sides(graph: nx.MultiDiGraph, way_ids: set[int]) -> None:
+    """Swap left/right tags on ways OSMnx reversed.
+
+    OSMnx flips the node order so the edge runs in the traffic direction, but
+    `cycleway:left` and `cycleway:right` still describe the drawn way. Swapping
+    them makes the tags relative to the edge the rest of the parser sees.
+    """
+    if not way_ids:
+        return
+    for _, _, _, data in graph.edges(keys=True, data=True):
+        osmids = data.get("osmid")
+        if isinstance(osmids, list):
+            matches = any(osmid in way_ids for osmid in osmids)
+        else:
+            matches = osmids in way_ids
+        if not matches:
+            continue
+        for left, right in SIDE_TAG_PAIRS:
+            left_value = data.pop(left, None)
+            right_value = data.pop(right, None)
+            if left_value is not None:
+                data[right] = left_value
+            if right_value is not None:
+                data[left] = right_value
+
+
 def postprocess_graph(
     graph: nx.MultiDiGraph,
+    reversed_way_ids: Optional[set[int]] = None,
 ) -> tuple[nx.MultiDiGraph, gpd.GeoDataFrame]:
     """Add contraflow bicycle edges and extract the per-direction edges table."""
+    _remap_way_sides(graph, reversed_way_ids or set())
     _add_bicycle_reverse_edges(graph)
     return graph, extract_per_direction_edges(graph)
 
