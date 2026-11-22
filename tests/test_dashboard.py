@@ -17,6 +17,7 @@ from shapely.geometry import LineString
 from streamlit.testing.v1 import AppTest
 
 from bubi.dashboard.app import (
+    DEMO_MODE_LABEL,
     LANE_COLOR,
     NO_LANE_COLOR,
     ROUTE_FIELDS,
@@ -27,7 +28,10 @@ from bubi.dashboard.app import (
     Settings,
     build_map,
     compass_headings,
+    corridors_geojson,
     export_csv,
+    station_candidates_geojson,
+    write_export,
     lane_status_geojson,
     legend_html,
     map_bounds,
@@ -611,7 +615,11 @@ def test_export_csv_writes_edge_ids_as_a_json_array(edge_ids):
 
 def test_export_csv_keeps_tables_without_edge_ids():
     table = pd.DataFrame({"cell_id": ["891e037aacfffff"], "rank": [1]})
-    assert export_csv(table) == table.to_csv(index=False).encode("utf-8")
+    exported = pd.read_csv(io.BytesIO(export_csv(table)))
+    assert exported.loc[0, "cell_id"] == "891e037aacfffff"
+    assert int(exported.loc[0, "rank"]) == 1
+    assert bool(exported.loc[0, "demo_mode"]) is True
+    assert "Synthetic demo data" in exported.loc[0, "data_label"]
 
 
 def test_missing_config_falls_back_to_defaults(tmp_path: Path):
@@ -624,3 +632,68 @@ def test_broken_config_is_reported_not_ignored(tmp_path: Path, text: str):
     path.write_text(text, encoding="utf-8")
     with pytest.raises(DashboardDataError, match="Using default settings"):
         load_config(path)
+
+
+# ---------------------------------------------------------------- week 4: exports & blocked state
+
+
+def test_corridors_geojson_has_geometry_scenario_and_demo_labels(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    corridors = for_scenario(data.get("corridors"), "baseline")
+    raw = corridors_geojson(corridors, data.get("edges"), scenario="baseline", demo_mode=True)
+    fc = json.loads(raw.decode("utf-8"))
+
+    assert fc["type"] == "FeatureCollection"
+    assert fc["properties"]["scenario"] == "baseline"
+    assert fc["properties"]["demo_mode"] is True
+    assert "Synthetic demo data" in fc["properties"]["data_label"]
+    assert len(fc["features"]) == len(corridors)
+    first = fc["features"][0]
+    assert first["geometry"]["type"] in {"LineString", "MultiLineString"}
+    assert first["properties"]["demo_mode"] is True
+    assert "Synthetic demo data" in first["properties"]["data_label"]
+
+
+def test_station_candidates_geojson_has_points_and_demo_labels(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    candidates = for_scenario(data.get("station_candidates"), "lane_aware")
+    raw = station_candidates_geojson(candidates, scenario="lane_aware", demo_mode=True)
+    fc = json.loads(raw.decode("utf-8"))
+
+    assert fc["type"] == "FeatureCollection"
+    assert len(fc["features"]) == len(candidates)
+    first = fc["features"][0]
+    assert first["geometry"]["type"] == "Point"
+    lon, lat = first["geometry"]["coordinates"]
+    assert 18.8 < lon < 19.5 and 47.3 < lat < 47.7
+    assert first["properties"]["demo_mode"] is True
+    assert DEMO_MODE_LABEL in first["properties"]["data_label"]
+
+
+def test_export_csv_includes_demo_mode_and_synthetic_label():
+    table = pd.DataFrame({"cell_id": ["891e037aacfffff"], "rank": [1]})
+    exported = pd.read_csv(io.BytesIO(export_csv(table, demo_mode=True)))
+    assert bool(exported.loc[0, "demo_mode"]) is True
+    assert "Synthetic demo data" in exported.loc[0, "data_label"]
+
+
+def test_write_export_persists_plain_file(tmp_path: Path):
+    target = write_export("corridors_baseline.geojson", b'{"type":"FeatureCollection"}', tmp_path)
+    assert target.exists()
+    assert json.loads(target.read_text(encoding="utf-8"))["type"] == "FeatureCollection"
+
+
+def test_missing_optional_table_names_file_and_producing_issue(fixture_copy: Path):
+    (fixture_copy / "sample_corridors.parquet").unlink()
+    data = load_dashboard_data(fixture_copy)
+    reason = data.missing_reason("corridors")
+    assert reason is not None
+    assert "sample_corridors.parquet" in reason
+    assert "#46" in reason
+
+
+def test_app_shows_blocked_state_notice_when_corridors_missing(monkeypatch, fixture_copy: Path):
+    (fixture_copy / "sample_corridors.parquet").unlink()
+    at = _run_app(monkeypatch, fixture_copy)
+    assert not at.exception
+    assert any("sample_corridors.parquet" in info.value and "#46" in info.value for info in at.info)

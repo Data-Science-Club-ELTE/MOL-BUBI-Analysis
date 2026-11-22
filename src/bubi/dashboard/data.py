@@ -27,6 +27,7 @@ from bubi.contracts.io import load_contract_table
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PROCESSED_DIR = REPO_ROOT / "data" / "processed"
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
+EXPORTS_DIR = REPO_ROOT / "outputs" / "exports"
 CONFIG_PATH = REPO_ROOT / "config" / "default_config.yaml"
 DATA_DIR_ENV = "BUBI_DATA_DIR"
 
@@ -34,6 +35,18 @@ DATA_DIR_ENV = "BUBI_DATA_DIR"
 REQUIRED_TABLES = ("stations", "edges")
 # Missing or invalid optional tables only switch off the layers that use them.
 OPTIONAL_TABLES = ("population", "station_candidates", "edge_scores", "corridors", "routes")
+
+# Maps each contract table to the pipeline stage / GitHub issue that produces it so
+# missing-table messages can tell the user what needs to run.
+TABLE_PRODUCERS: dict[str, str] = {
+    "stations": "Ingestion — stations snapshot (`src/bubi/ingestion/stations_table.py`, #5)",
+    "edges": "Network — street graph & bike lanes (`src/bubi/network/graph.py`, #12 / #88)",
+    "population": "Population — H3 population grid (`src/bubi/population/grid.py`, #18)",
+    "station_candidates": "Stations — candidate selection (`src/bubi/stations/selector.py`, #38)",
+    "edge_scores": "Corridors — edge scoring (`src/bubi/corridors/scoring.py`, #45)",
+    "corridors": "Corridors — gap ranking (`src/bubi/corridors/scoring.py`, #46)",
+    "routes": "Routing — OD route generation (`src/bubi/routing/router.py`, #28)",
+}
 
 SCENARIOS = ("baseline", "lane_aware", "population_only")
 BUDAPEST_CENTER = (47.4979, 19.0541)
@@ -51,9 +64,28 @@ class DashboardData:
     sources: dict[str, str] = field(default_factory=dict)  # "processed" or "fixtures"
     tables: dict[str, pd.DataFrame] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    table_issues: dict[str, str] = field(default_factory=dict)
 
     def get(self, name: str) -> pd.DataFrame | None:
         return self.tables.get(name)
+
+    def is_available(self, name: str) -> bool:
+        table = self.tables.get(name)
+        return table is not None and not table.empty
+
+    def missing_reason(self, name: str) -> str | None:
+        """Human-readable explanation naming the file and producing issue when unavailable."""
+        if name in self.table_issues:
+            return self.table_issues[name]
+        table = self.tables.get(name)
+        if table is None:
+            path = self.paths.get(name, table_path(PROCESSED_DIR, name, "processed"))
+            producer = TABLE_PRODUCERS.get(name, "pipeline run")
+            return f"Missing `{path.name}` (`{path}`), produced by {producer}."
+        if table.empty:
+            producer = TABLE_PRODUCERS.get(name, "pipeline run")
+            return f"`{name}` table has 0 rows (produced by {producer})."
+        return None
 
     @property
     def fixture_tables(self) -> list[str]:
@@ -63,6 +95,8 @@ class DashboardData:
     @property
     def source(self) -> str:
         """``processed``, ``fixtures`` or ``mixed``, for the data-mode badge."""
+        if not self.tables:
+            return "fixtures"
         kinds = {self.sources[name] for name in self.tables}
         return kinds.pop() if len(kinds) == 1 else "mixed"
 
@@ -109,21 +143,22 @@ def _first_lines(text: str, max_lines: int = 3, max_chars: int = 400) -> str:
 
 def load_table(table_name: str, path: Path) -> pd.DataFrame:
     """Load one contract table and validate it, turning failures into clear messages."""
+    producer = TABLE_PRODUCERS.get(table_name, "the data pipeline")
     try:
         return load_contract_table(table_name, path, validate=True)
     except FileNotFoundError as err:
         raise DashboardDataError(
-            f"The `{table_name}` table is missing. Expected file: `{path}`. "
-            "Run `make fixtures` to recreate the sample data."
+            f"The `{table_name}` table is missing. Expected file: `{path}` "
+            f"(produced by {producer}). Run `make fixtures` or the producing pipeline stage."
         ) from err
     except (pa_errors.SchemaError, pa_errors.SchemaErrors) as err:
         raise DashboardDataError(
-            f"The `{table_name}` table at `{path}` does not match its data contract "
-            f"(`src/bubi/contracts/schemas.py`):\n\n{_first_lines(err)}"
+            f"The `{table_name}` table at `{path}` (produced by {producer}) does not match "
+            f"its data contract (`src/bubi/contracts/schemas.py`):\n\n{_first_lines(err)}"
         ) from err
     except Exception as err:  # unreadable or corrupt file
         raise DashboardDataError(
-            f"The `{table_name}` table at `{path}` could not be read "
+            f"The `{table_name}` table at `{path}` (produced by {producer}) could not be read "
             f"({type(err).__name__}: {_first_lines(err, max_lines=1)})."
         ) from err
 
@@ -143,7 +178,9 @@ def load_dashboard_data(data_dir: Path | None = None) -> DashboardData:
         except DashboardDataError as err:
             if name in REQUIRED_TABLES:
                 raise
-            data.warnings.append(f"Layers using `{name}` are switched off. {err}")
+            reason = str(err)
+            data.table_issues[name] = reason
+            data.warnings.append(f"Layers using `{name}` are switched off. {reason}")
     return data
 
 
