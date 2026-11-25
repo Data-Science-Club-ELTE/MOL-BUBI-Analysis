@@ -1,0 +1,267 @@
+"""Build the technical report and the final quality report (issue #74).
+
+Every number in both reports is computed by ``scripts/technical_report.py`` from the
+tables it names; nothing is typed by hand. Every table carries a provenance line that
+names its file(s) and says whether they are real data or test fixtures.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Any, Iterable, Optional
+
+import pandas as pd
+
+REAL = "real"
+FIXTURE = "fixture"
+SYNTHETIC = "synthetic from real inputs"
+
+APPENDIX_PATH = "docs/methodology_appendix.md"
+# Appendix sections copied verbatim into the report's limitations section.
+APPENDIX_SECTIONS = ("1.1", "3", "4", "5")
+
+RERUN_CHECKLIST = [
+    "Build `data/processed/edges.parquet` with `bubi.network.build_street_network` and "
+    "attach `grade` from the DEM (appendix §4, row 4); without it routing is shortest-length.",
+    "Rerun `scripts/technical_report.py`: the edges row of the quality profile switches "
+    "from fixture to real, and the edge checks (duplicates, lengths, lane share per "
+    "direction) run on Budapest.",
+    "Rerun `scripts/lane_connectivity_pass_rate.py` on real edges and record whether "
+    "lane connectivity stays a continuous score.",
+    "Generate `lane_aware` station candidates on real lanes; the lane-aware table in "
+    "Results changes from fixture to real.",
+    "Route the real trip matrix (`routing.route_station_pairs`) and write `routes`; report "
+    "unroutable pairs and dropped trips (metric M12).",
+    "Score gaps and merge corridors on real routes (`corridors.scoring`); the edge-score, "
+    "corridor and scenario-comparison tables change from fixture to synthetic-on-real.",
+    "Implement metric M6 (newly served population per km of new corridor) before "
+    "comparing lane_aware with population_only (appendix §4, row 8).",
+    "Update appendix §1 and §4 and regenerate both reports.",
+]
+
+
+@dataclass(frozen=True)
+class Source:
+    """Where a table came from: its file and whether it is real data or a fixture."""
+
+    table: str
+    path: str
+    kind: str  # REAL, FIXTURE or SYNTHETIC
+
+    def label(self) -> str:
+        return f"`{self.path}` ({self.kind})"
+
+
+def provenance(sources: Iterable[Source], note: Optional[str] = None) -> str:
+    """One italic line under a table: files used and real/fixture status."""
+    sources = list(sources)
+    kinds = {s.kind for s in sources}
+    scale = "fixture-scale" if FIXTURE in kinds else "real-scale"
+    line = f"*Source: {'; '.join(s.label() for s in sources)}. {scale.capitalize()}.*"
+    return f"{line} *{note}*" if note else line
+
+
+def markdown_table(df: pd.DataFrame, formats: Optional[dict[str, str]] = None) -> list[str]:
+    """Render a DataFrame as Markdown; ``formats`` maps column -> format string."""
+    formats = formats or {}
+    columns = list(df.columns)
+    lines = ["| " + " | ".join(str(c) for c in columns) + " |", "|" + "---|" * len(columns)]
+    for row in df.to_dict("records"):
+        cells = []
+        for column in columns:
+            value = row[column]
+            if value is None or (isinstance(value, float) and pd.isna(value)):
+                cells.append("—")
+            elif column in formats:
+                cells.append(formats[column].format(value))
+            else:
+                cells.append(str(value))
+        lines.append("| " + " | ".join(c.replace("|", "/") for c in cells) + " |")
+    return lines
+
+
+def appendix_sections(text: str, numbers: Iterable[str] = APPENDIX_SECTIONS) -> dict[str, str]:
+    """Return appendix sections by number, verbatim, without their heading line.
+
+    A section runs from its heading (``## 3.`` or ``### 1.1``) to the next heading of the
+    same or higher level. A section that is not found is missing from the result.
+    """
+    lines = text.splitlines()
+    found: dict[str, str] = {}
+    for number in numbers:
+        pattern = re.compile(rf"^(#+)\s+{re.escape(number)}\.?\s")
+        for start, line in enumerate(lines):
+            match = pattern.match(line)
+            if not match:
+                continue
+            level = len(match.group(1))
+            end = len(lines)
+            for j in range(start + 1, len(lines)):
+                heading = re.match(r"^(#+)\s", lines[j])
+                if heading and len(heading.group(1)) <= level:
+                    end = j
+                    break
+            body = "\n".join(lines[start + 1 : end]).strip()
+            found[number] = re.sub(r"\n-{3,}\s*$", "", body).strip()
+            break
+    return found
+
+
+def build_quality_report_final(
+    profiles: list[tuple[dict[str, Any], Source]],
+    command: str,
+    commit: str,
+) -> str:
+    """Final quality report: one section per table with its provenance."""
+    from bubi.profiling.profiler import FAIL
+
+    lines = [
+        "# Data Quality Report: Final",
+        "",
+        f"Generated by `{command}` at commit `{commit}`. Do not edit by hand.",
+        "",
+        "| Table | File | Status | Rows | Failed checks |",
+        "|---|---|---|---|---|",
+    ]
+    for profile, source in profiles:
+        failed = sum(c["status"] == FAIL for c in profile["checks"])
+        lines.append(
+            f"| `{source.table}` | `{source.path}` | {source.kind} | {profile['rows']:,} | {failed} |"
+        )
+    lines.append("")
+
+    problems = []
+    for profile, source in profiles:
+        nulls = {col: n for col, n in profile["null_counts"].items() if n}
+        lines += [
+            f"## `{source.table}`",
+            "",
+            provenance([source]),
+            "",
+            f"- Rows: {profile['rows']:,}",
+            f"- Columns: {', '.join(f'`{c}`' for c in profile['columns'])}",
+            f"- Missing values: {nulls if nulls else 'none'}",
+            "",
+            "| Check | Result | Details |",
+            "|---|---|---|",
+        ]
+        for check in profile["checks"]:
+            lines.append(f"| {check['check']} | {check['status'].upper()} | {check['detail']} |")
+            if check["status"] == FAIL:
+                problems.append(f"`{source.table}` ({source.kind}): {check['check']}")
+        lines.append("")
+
+    lines += ["## Problems to report to table owners", ""]
+    lines += [f"- {p}" for p in problems] if problems else ["- None found."]
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_technical_report(
+    results: dict[str, tuple[list[str], list[Source], Optional[str]]],
+    data_sources: list[Source],
+    appendix_text: Optional[str],
+    command: str,
+    commit: str,
+) -> str:
+    """Technical report: question, data, method, results, limitations, reproduction.
+
+    ``results`` maps a subsection title to (table lines, sources, note).
+    """
+    lines = [
+        "# Technical Report",
+        "",
+        f"Generated by `{command}` at commit `{commit}`. Do not edit numbers by hand: "
+        "edit the script and regenerate.",
+        "",
+        "Every table states its source and whether it is **real** data, **synthetic from "
+        "real inputs** (computed by a model from real tables), or a **fixture** (small test "
+        "data, fixture-scale: it shows the method works, not what Budapest looks like).",
+        "",
+        "## 1. Question",
+        "",
+        "Where should Budapest add bike lanes and MOL Bubi docking stations, given the "
+        "street network, slope and where people live? The project builds a decision-support "
+        "tool that ranks missing-lane corridors and proposes new stations under three "
+        "scenarios: `baseline` (existing stations), `lane_aware` and `population_only` "
+        "(existing plus 10 proposed stations each).",
+        "",
+        "## 2. Data",
+        "",
+    ]
+    data_table = pd.DataFrame(
+        [{"table": f"`{s.table}`", "file": f"`{s.path}`", "status": s.kind} for s in data_sources]
+    )
+    lines += markdown_table(data_table)
+    lines += [
+        "",
+        provenance(data_sources, "File presence at generation time."),
+        "",
+        "Real inputs: BKK Futár station snapshot (2026-10-18) and WorldPop 2026 constrained "
+        "population. No street network (`edges.parquet`) and no real trips exist yet. Data "
+        "quality is reported in `docs/quality_report_final.md`.",
+        "",
+        "## 3. Method",
+        "",
+        "Formulas, symbols and parameters are in `docs/methodology_appendix.md` §2 and §6. "
+        "In short:",
+        "",
+        "- **Coverage:** a population cell is covered when its centre is within a "
+        "straight-line distance (EPSG:23700) of a station.",
+        "- **Synthetic demand:** gravity model, trips ∝ P_i × P_j × exp(−β·d_ij), scaled to "
+        "k × catchment population (`docs/gravity_model_spec.md`).",
+        "- **Station siting:** candidate cells (≥ 100 residents, > 350 m from every station) "
+        "scored by normalised population (× normalised lane connectivity for `lane_aware`), "
+        "picked greedily with 400 m spacing.",
+        "- **Corridors:** used road directions without a dedicated lane, scored by route "
+        "volume × gap length × continuity factor, merged into corridors and ranked.",
+        "",
+        "## 4. Results",
+        "",
+    ]
+    for title, (table_lines, sources, note) in results.items():
+        lines += [f"### {title}", ""]
+        lines += table_lines
+        lines += ["", provenance(sources, note), ""]
+
+    lines += ["## 5. Limitations", ""]
+    sections = appendix_sections(appendix_text) if appendix_text else {}
+    if not sections:
+        lines += [
+            f"**Missing:** `{APPENDIX_PATH}` was not found, so its limitations are not "
+            "copied here. Merge the appendix and regenerate.",
+            "",
+        ]
+    else:
+        lines += [
+            f"Copied verbatim from `{APPENDIX_PATH}` by the generator; edit the appendix, not "
+            "this section. Section references (§) point to the appendix.",
+            "",
+        ]
+        for number in APPENDIX_SECTIONS:
+            if number in sections:
+                lines += [f"### Appendix §{number}", "", sections[number], ""]
+            else:
+                lines += [f"### Appendix §{number}", "", "**Missing from the appendix.**", ""]
+
+    lines += [
+        "## 6. Reproduction",
+        "",
+        "From the repository root, after `make install`:",
+        "",
+        "```bash",
+        command,
+        "```",
+        "",
+        "This writes `docs/technical_report.md` and `docs/quality_report_final.md`. It needs "
+        "`data/processed/stations.parquet` and `data/processed/population.parquet` "
+        "(see `docs/ingestion_notes.md` §10 and `src/bubi/population/README.md`); missing "
+        "tables fall back to `tests/fixtures/` and are labelled as fixtures.",
+        "",
+        "### Rerun checklist once `edges.parquet` exists",
+        "",
+    ]
+    lines += [f"- [ ] {item}" for item in RERUN_CHECKLIST]
+    lines.append("")
+    return "\n".join(lines)
