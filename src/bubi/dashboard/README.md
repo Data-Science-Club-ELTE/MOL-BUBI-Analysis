@@ -207,3 +207,50 @@ Leaflet and the other scripts.
 With only the street layer, the 200,000-edge page takes 3.1–3.3 s on the same measure, so the route
 layer adds about 3.3 s at that size. Hover response on a city-sized layer has not been measured;
 check it in a browser once the real network is merged.
+
+---
+
+## 7. Week 4: Exports & Blocked-State Handling
+
+### GeoJSON and CSV exports
+
+The sidebar (**Exports**) and table tabs provide CSV and RFC 7946 GeoJSON exports for the active
+scenario (`corridors_<scenario>.csv`, `corridors_<scenario>.geojson`,
+`station_candidates_<scenario>.csv`, `station_candidates_<scenario>.geojson`) and a button to save
+them under `outputs/exports/`.
+
+- **Schema checks:** `corridors` exports validate against `CorridorsSchema` and
+  `station_candidates` exports validate against `StationCandidatesSchema` before serialization.
+- **Plain external format:** CSV files serialize `edge_ids` as JSON arrays and open in pandas,
+  Excel, or LibreOffice. GeoJSON files hold a standard `FeatureCollection` (corridors as
+  `LineString`/`MultiLineString` geometries from `edges`, station candidates as `Point` geometries
+  at H3 cell centres) and open in QGIS, geojson.io, or GeoPandas.
+- **Preserved labels:** Every CSV row and every GeoJSON feature (plus `FeatureCollection.metadata`)
+  carries `demo_notice` and `synthetic_label` so D5 synthetic-data notices survive outside the app.
+
+### Blocked-state handling
+
+When an optional table (`population`, `station_candidates`, `edge_scores`, `corridors`, `routes`) is
+missing or fails validation, `load_dashboard_data()` records the problem in `data.table_errors` and
+names both the table file (for example `corridors.parquet`) and the owning issue (`#37` for
+`corridors`, `#39` for `station_candidates`, `#21` for `edge_scores`, `#31 / #36` for `routes`,
+`#23` for `population`). Enabled map layers, the sidebar Exports panel, and the table tabs show that
+message instead of failing silently with an empty layer.
+
+### Full Budapest extent load time
+
+Measured on 2026-11-28 against the real frozen Budapest street network in
+`data/processed/edges.parquet` (744,298 directed edges) and `data/processed/stations.parquet` (704
+stations) with `make measure-dashboard MEASURE_ARGS="--edges data/processed/edges.parquet"`:
+
+| Step | Measured time / size |
+|---|---:|
+| Validate `edges` (`EdgesSchema`) | 0.06 s |
+| Build lane-status GeoJSON | 2.96 s |
+| Build Folium map | 0.02 s |
+| Render map to HTML | 0.01 s |
+| Rendered page size | 31.1 MB |
+
+A cold headless Streamlit startup (`AppTest`) from `data/processed/` (using `edges.parquet`,
+`stations.parquet`, `population.parquet`, and fixture fallbacks for the unproduced downstream tables)
+completes in 5.36 s with zero errors.

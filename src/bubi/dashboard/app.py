@@ -17,6 +17,7 @@ import os
 import time
 from dataclasses import dataclass, replace
 from html import escape
+from pathlib import Path
 
 import folium
 import geopandas as gpd
@@ -28,20 +29,25 @@ import streamlit as st
 from branca.element import Element, MacroElement, Template
 from streamlit_folium import st_folium
 
+from bubi.contracts.schemas import CorridorsSchema, StationCandidatesSchema
 from bubi.corridors.scoring import calculate_edge_route_volumes
 from bubi.dashboard.data import (
     BUDAPEST_CENTER,
     DATA_DIR_ENV,
+    EXPORTS_DIR,
     SCENARIOS,
     DashboardData,
     DashboardDataError,
     as_id_list,
     cell_center,
+    demo_notice_text,
     fixture_notes,
     for_scenario,
     load_config,
     load_dashboard_data,
+    missing_table_message,
     proposed_stations,
+    resolve_exports_dir,
     resolve_table_paths,
 )
 
@@ -310,7 +316,9 @@ def compass_headings(lines: np.ndarray) -> np.ndarray:
 
 
 def route_layer_label(routes: pd.DataFrame) -> str:
-    kinds = set(routes["route_type"]) if "route_type" in routes else {"synthetic"}
+    if routes is None or routes.empty or "route_type" not in routes:
+        return "Synthetic demo data (D5): not observed cycling"
+    kinds = set(routes["route_type"])
     if kinds == {"synthetic"}:
         return "Synthetic demo data (D5): not observed cycling"
     if kinds == {"observed"}:
@@ -598,6 +606,12 @@ class RouteVolumeLayer(_InlineDataLayer):
 # ---------------------------------------------------------------- map
 
 
+def _blocked_table_note(data: DashboardData, table_name: str) -> str:
+    if table_name in data.table_errors:
+        return data.table_errors[table_name]
+    return missing_table_message(table_name, data.paths.get(table_name))
+
+
 def build_map(
     data: DashboardData,
     settings: Settings,
@@ -625,26 +639,31 @@ def build_map(
         fmap.fit_bounds(bounds)
 
     population = data.get("population")
-    if settings.show_population and population is not None and not population.empty:
-        layer = folium.FeatureGroup(name="Population (H3)")
-        max_pop = float(population["population"].max()) or 1.0
-        skipped = 0
-        for _, row in population.iterrows():
-            if cell_center(row["cell_id"]) is None:
-                skipped += 1
-                continue
-            folium.Polygon(
-                locations=h3.cell_to_boundary(row["cell_id"]),
-                color=POPULATION_COLOR,
-                weight=0.5,
-                fill=True,
-                fill_opacity=0.15 + 0.5 * row["population"] / max_pop,
-                tooltip=f"Population: {row['population']:.0f}",
-            ).add_to(layer)
-        layer.add_to(fmap)
-        legend.append((_area_swatch(POPULATION_COLOR), "Population (darker = more people)"))
-        if skipped:
-            notes.append(f"{skipped} population cell(s) have an invalid H3 id and are not drawn.")
+    if settings.show_population:
+        if population is None:
+            notes.append(f"Population layer blocked: {_blocked_table_note(data, 'population')}")
+        elif not population.empty:
+            layer = folium.FeatureGroup(name="Population (H3)")
+            max_pop = float(population["population"].max()) or 1.0
+            skipped = 0
+            for _, row in population.iterrows():
+                if cell_center(row["cell_id"]) is None:
+                    skipped += 1
+                    continue
+                folium.Polygon(
+                    locations=h3.cell_to_boundary(row["cell_id"]),
+                    color=POPULATION_COLOR,
+                    weight=0.5,
+                    fill=True,
+                    fill_opacity=0.15 + 0.5 * row["population"] / max_pop,
+                    tooltip=f"Population: {row['population']:.0f}",
+                ).add_to(layer)
+            layer.add_to(fmap)
+            legend.append((_area_swatch(POPULATION_COLOR), "Population (darker = more people)"))
+            if skipped:
+                notes.append(
+                    f"{skipped} population cell(s) have an invalid H3 id and are not drawn."
+                )
 
     if settings.show_lanes and not edges.empty:
         geojson = lane_geojson if lane_geojson is not None else lane_status_geojson(edges)
@@ -654,41 +673,49 @@ def build_map(
             (_line_swatch(NO_LANE_COLOR, NO_LANE_WEIGHT), "No bike lane in this direction")
         )
 
-    routes = for_scenario(data.get("routes"), scenario)
+    routes_table = data.get("routes")
+    routes = for_scenario(routes_table, scenario)
     route_shown = False
-    if settings.show_routes and not routes.empty:
-        if route_layer is None:
-            route_layer = route_volume_layer(edges, routes)
-        notes.extend(route_layer.notes)
-        if route_layer.legend:
-            fmap.add_child(RouteVolumeLayer(route_layer))
-            legend.extend(route_layer.legend)
-            route_shown = True
+    if settings.show_routes:
+        if routes_table is None:
+            notes.append(f"Route layer blocked: {_blocked_table_note(data, 'routes')}")
+        elif not routes.empty:
+            if route_layer is None:
+                route_layer = route_volume_layer(edges, routes)
+            notes.extend(route_layer.notes)
+            if route_layer.legend:
+                fmap.add_child(RouteVolumeLayer(route_layer))
+                legend.extend(route_layer.legend)
+                route_shown = True
 
-    corridors = for_scenario(data.get("corridors"), scenario)
-    if settings.show_corridors and not corridors.empty:
-        top = corridors.sort_values("rank").head(settings.top_n)
-        layer = folium.FeatureGroup(name="Top corridors")
-        edges_by_id = edges.set_index("edge_id")
-        for _, corridor in top.iterrows():
-            for edge_id in as_id_list(corridor["edge_ids"]):
-                if edge_id not in edges_by_id.index:
-                    notes.append(
-                        f"Corridor {corridor['corridor_id']} uses unknown edge `{edge_id}`."
-                    )
-                    continue
-                folium.PolyLine(
-                    offset_line(list(edges_by_id.loc[edge_id].geometry.coords)),
-                    color=GAP_COLOR,
-                    weight=7,
-                    opacity=0.9,
-                    tooltip=(
-                        f"Corridor {corridor['corridor_id']} · rank {corridor['rank']} · "
-                        f"edge {edge_id} · score {corridor['score']:.0f}"
-                    ),
-                ).add_to(layer)
-        layer.add_to(fmap)
-        legend.append((_line_swatch(GAP_COLOR, 6), "Priority corridor (missing lane)"))
+    corridors_table = data.get("corridors")
+    corridors = for_scenario(corridors_table, scenario)
+    if settings.show_corridors:
+        if corridors_table is None:
+            notes.append(f"Corridors layer blocked: {_blocked_table_note(data, 'corridors')}")
+        elif not corridors.empty:
+            top = corridors.sort_values("rank").head(settings.top_n)
+            layer = folium.FeatureGroup(name="Top corridors")
+            edges_by_id = edges.set_index("edge_id")
+            for _, corridor in top.iterrows():
+                for edge_id in as_id_list(corridor["edge_ids"]):
+                    if edge_id not in edges_by_id.index:
+                        notes.append(
+                            f"Corridor {corridor['corridor_id']} uses unknown edge `{edge_id}`."
+                        )
+                        continue
+                    folium.PolyLine(
+                        offset_line(list(edges_by_id.loc[edge_id].geometry.coords)),
+                        color=GAP_COLOR,
+                        weight=7,
+                        opacity=0.9,
+                        tooltip=(
+                            f"Corridor {corridor['corridor_id']} · rank {corridor['rank']} · "
+                            f"edge {edge_id} · score {corridor['score']:.0f}"
+                        ),
+                    ).add_to(layer)
+            layer.add_to(fmap)
+            legend.append((_line_swatch(GAP_COLOR, 6), "Priority corridor (missing lane)"))
 
     if settings.show_stations and not stations.empty:
         # One GeoJSON layer: a separate Folium marker per station adds about 1 s per rerun
@@ -708,32 +735,40 @@ def build_map(
         ).add_to(fmap)
         legend.append((_dot_swatch(STATION_COLOR), "Existing station"))
 
+    candidates_table = data.get("station_candidates")
     candidates = proposed_stations(data, scenario)
-    if settings.show_proposed and not candidates.empty:
-        layer = folium.FeatureGroup(name="Proposed stations")
-        skipped = 0
-        for _, row in candidates.iterrows():
-            center = cell_center(row["cell_id"])
-            if center is None:
-                skipped += 1
-                continue
-            folium.RegularPolygonMarker(
-                location=center,
-                number_of_sides=6,
-                radius=9,
-                color="#ffffff",
-                weight=1.5,
-                fill_color=PROPOSED_COLOR,
-                fill_opacity=0.95,
-                tooltip=(
-                    f"Proposed new:{row['cell_id']} · rank {row['rank']} · "
-                    f"population {row['population']:.0f} · score {row['score']:.2f}"
-                ),
-            ).add_to(layer)
-        layer.add_to(fmap)
-        legend.append((_hexagon_swatch(PROPOSED_COLOR), "Proposed station (H3 cell centre)"))
-        if skipped:
-            notes.append(f"{skipped} proposed station(s) have an invalid H3 id and are not drawn.")
+    if settings.show_proposed:
+        if candidates_table is None and scenario != "baseline":
+            notes.append(
+                f"Proposed stations layer blocked: {_blocked_table_note(data, 'station_candidates')}"
+            )
+        elif not candidates.empty:
+            layer = folium.FeatureGroup(name="Proposed stations")
+            skipped = 0
+            for _, row in candidates.iterrows():
+                center = cell_center(row["cell_id"])
+                if center is None:
+                    skipped += 1
+                    continue
+                folium.RegularPolygonMarker(
+                    location=center,
+                    number_of_sides=6,
+                    radius=9,
+                    color="#ffffff",
+                    weight=1.5,
+                    fill_color=PROPOSED_COLOR,
+                    fill_opacity=0.95,
+                    tooltip=(
+                        f"Proposed new:{row['cell_id']} · rank {row['rank']} · "
+                        f"population {row['population']:.0f} · score {row['score']:.2f}"
+                    ),
+                ).add_to(layer)
+            layer.add_to(fmap)
+            legend.append((_hexagon_swatch(PROPOSED_COLOR), "Proposed station (H3 cell centre)"))
+            if skipped:
+                notes.append(
+                    f"{skipped} proposed station(s) have an invalid H3 id and are not drawn."
+                )
 
     if legend:
         note = []
@@ -756,12 +791,7 @@ def render_header(data: DashboardData | None) -> None:
     left.title("🚲 MOL Bubi Bike-Lane & Station Recommendation Tool")
     if data is None:
         return
-    source = {
-        "fixtures": "sample fixtures",
-        "processed": "pipeline outputs",
-        "mixed": "pipeline outputs + sample fixtures",
-    }[data.source]
-    right.warning(f"**Synthetic demo data** (D5) · {source}")
+    right.warning(demo_notice_text(data))
 
 
 def render_sidebar(config: dict) -> Settings:
@@ -887,48 +917,365 @@ def render_scenario_comparison(data: DashboardData, settings: Settings) -> None:
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
 
-def export_csv(table: pd.DataFrame) -> bytes:
+def export_labels(data: DashboardData | None, scenario: str) -> tuple[str, str]:
+    """Return ``(demo_notice, synthetic_label)`` attached to every export."""
+    demo_notice = demo_notice_text(data) if data is not None else "Synthetic demo data (D5)"
+    routes = for_scenario(data.get("routes"), scenario) if data is not None else pd.DataFrame()
+    return demo_notice, route_layer_label(routes)
+
+
+def export_csv(
+    table: pd.DataFrame,
+    *,
+    demo_notice: str | None = None,
+    synthetic_label: str | None = None,
+) -> bytes:
     """A table as UTF-8 CSV for download.
 
     ``edge_ids`` is written as a JSON array, the contract's string form. A list read
     back from Parquet is a NumPy array, and pandas would otherwise write it as
     ``['a-b-0' 'b-c-0']``, which spreadsheets and other tools cannot parse.
+    When ``demo_notice`` or ``synthetic_label`` is given, it is attached as a
+    plain CSV column on every row so demo notices survive outside the app.
     """
-    if "edge_ids" in table:
-        table = table.assign(edge_ids=table["edge_ids"].map(lambda v: json.dumps(as_id_list(v))))
-    return table.to_csv(index=False).encode("utf-8")
+    out = table.copy()
+    if "edge_ids" in out:
+        out = out.assign(edge_ids=out["edge_ids"].map(lambda v: json.dumps(as_id_list(v))))
+    if demo_notice is not None:
+        out["demo_notice"] = demo_notice
+    if synthetic_label is not None:
+        out["synthetic_label"] = synthetic_label
+    return out.to_csv(index=False).encode("utf-8")
 
 
-def render_tables(data: DashboardData, scenario: str) -> None:
-    corridors = for_scenario(data.get("corridors"), scenario)
-    candidates = for_scenario(data.get("station_candidates"), scenario)
+def corridors_export_csv(
+    corridors: pd.DataFrame,
+    scenario: str,
+    *,
+    demo_notice: str = "Synthetic demo data (D5)",
+    synthetic_label: str = "Synthetic demo data (D5): not observed cycling",
+) -> bytes:
+    """Validate ``corridors`` against ``CorridorsSchema`` and export one scenario as CSV."""
+    validated = CorridorsSchema.validate(corridors)
+    filtered = validated[validated["scenario"] == scenario].sort_values("rank")
+    return export_csv(filtered, demo_notice=demo_notice, synthetic_label=synthetic_label)
+
+
+def station_candidates_export_csv(
+    candidates: pd.DataFrame,
+    scenario: str,
+    *,
+    demo_notice: str = "Synthetic demo data (D5)",
+    synthetic_label: str = "Synthetic demo data (D5): not observed cycling",
+) -> bytes:
+    """Validate ``candidates`` against ``StationCandidatesSchema`` and export one scenario as CSV."""
+    validated = StationCandidatesSchema.validate(candidates)
+    filtered = validated[validated["scenario"] == scenario].sort_values("rank", na_position="last")
+    return export_csv(filtered, demo_notice=demo_notice, synthetic_label=synthetic_label)
+
+
+def _geojson_collection(
+    features: list[dict], scenario: str, demo_notice: str, synthetic_label: str
+) -> bytes:
+    collection = {
+        "type": "FeatureCollection",
+        "metadata": {
+            "scenario": scenario,
+            "demo_notice": demo_notice,
+            "synthetic_label": synthetic_label,
+        },
+        "features": features,
+    }
+    return json.dumps(collection, indent=2).encode("utf-8")
+
+
+def _corridor_geometry_and_length(
+    edge_ids: list[str], edges_by_id: gpd.GeoDataFrame
+) -> tuple[dict | None, float]:
+    geoms = []
+    total_length_m = 0.0
+    for edge_id in edge_ids:
+        if edges_by_id.empty or edge_id not in edges_by_id.index:
+            continue
+        edge_row = edges_by_id.loc[edge_id]
+        if isinstance(edge_row, pd.DataFrame):
+            edge_row = edge_row.iloc[0]
+        geoms.append(edge_row.geometry)
+        total_length_m += float(edge_row["length_m"])
+    if not geoms:
+        return None, total_length_m
+    geom = geoms[0] if len(geoms) == 1 else shapely.line_merge(shapely.MultiLineString(geoms))
+    return json.loads(shapely.to_geojson(geom)), total_length_m
+
+
+def corridors_geojson(
+    corridors: pd.DataFrame,
+    edges: gpd.GeoDataFrame,
+    scenario: str,
+    *,
+    demo_notice: str = "Synthetic demo data (D5)",
+    synthetic_label: str = "Synthetic demo data (D5): not observed cycling",
+) -> bytes:
+    """Validate ``corridors`` and export one scenario as RFC 7946 GeoJSON bytes."""
+    validated = CorridorsSchema.validate(corridors)
+    filtered = validated[validated["scenario"] == scenario].sort_values("rank")
+    edges_wgs84 = (
+        edges
+        if edges.crs is None or edges.crs.to_string() == "EPSG:4326"
+        else edges.to_crs("EPSG:4326")
+    )
+    edges_by_id = edges_wgs84.set_index("edge_id") if not edges_wgs84.empty else edges_wgs84
+
+    features = []
+    for _, row in filtered.iterrows():
+        edge_ids = as_id_list(row["edge_ids"])
+        geometry, total_length_m = _corridor_geometry_and_length(edge_ids, edges_by_id)
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {
+                    "scenario": str(row["scenario"]),
+                    "corridor_id": str(row["corridor_id"]),
+                    "rank": int(row["rank"]),
+                    "score": float(row["score"]),
+                    "edge_ids": json.dumps(edge_ids),
+                    "edge_count": len(edge_ids),
+                    "length_m": round(total_length_m, 2),
+                    "demo_notice": demo_notice,
+                    "synthetic_label": synthetic_label,
+                },
+                "geometry": geometry,
+            }
+        )
+    return _geojson_collection(features, scenario, demo_notice, synthetic_label)
+
+
+def station_candidates_geojson(
+    candidates: pd.DataFrame,
+    scenario: str,
+    *,
+    demo_notice: str = "Synthetic demo data (D5)",
+    synthetic_label: str = "Synthetic demo data (D5): not observed cycling",
+) -> bytes:
+    """Validate ``candidates`` and export one scenario as RFC 7946 GeoJSON bytes."""
+    validated = StationCandidatesSchema.validate(candidates)
+    filtered = validated[validated["scenario"] == scenario].sort_values("rank", na_position="last")
+
+    features = []
+    for _, row in filtered.iterrows():
+        center = cell_center(row["cell_id"])
+        geometry = (
+            {"type": "Point", "coordinates": [float(center[1]), float(center[0])]}
+            if center is not None
+            else None
+        )
+        rank_val = None if pd.isna(row["rank"]) else int(row["rank"])
+        conn_val = None if pd.isna(row["lane_connectivity"]) else float(row["lane_connectivity"])
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {
+                    "scenario": str(row["scenario"]),
+                    "cell_id": str(row["cell_id"]),
+                    "station_id": f"new:{row['cell_id']}",
+                    "population": float(row["population"]),
+                    "lane_connectivity": conn_val,
+                    "score": float(row["score"]),
+                    "rank": rank_val,
+                    "selected": rank_val is not None,
+                    "demo_notice": demo_notice,
+                    "synthetic_label": synthetic_label,
+                },
+                "geometry": geometry,
+            }
+        )
+    return _geojson_collection(features, scenario, demo_notice, synthetic_label)
+
+
+def _export_payloads(
+    data: DashboardData, scenario: str, kind: str
+) -> tuple[tuple[str, bytes, str, bytes] | None, str | None]:
+    """Build ``(csv_name, csv_bytes, geojson_name, geojson_bytes)`` or a skip/blocked reason."""
+    demo_notice, synthetic_label = export_labels(data, scenario)
+    if kind == "corridors":
+        corridors_table = data.get("corridors")
+        edges_table = data.get("edges")
+        if corridors_table is None:
+            return None, _blocked_table_note(data, "corridors")
+        if edges_table is None:
+            return None, _blocked_table_note(data, "edges")
+        if for_scenario(corridors_table, scenario).empty:
+            return None, f"No corridors to export for scenario `{scenario}`."
+        return (
+            f"corridors_{scenario}.csv",
+            corridors_export_csv(
+                corridors_table, scenario, demo_notice=demo_notice, synthetic_label=synthetic_label
+            ),
+            f"corridors_{scenario}.geojson",
+            corridors_geojson(
+                corridors_table,
+                edges_table,
+                scenario,
+                demo_notice=demo_notice,
+                synthetic_label=synthetic_label,
+            ),
+        ), None
+
+    candidates_table = data.get("station_candidates")
+    if candidates_table is None:
+        if scenario == "baseline":
+            return None, f"No proposed stations in scenario `{scenario}`."
+        return None, _blocked_table_note(data, "station_candidates")
+    if for_scenario(candidates_table, scenario).empty:
+        return None, f"No station candidates to export for scenario `{scenario}`."
+    return (
+        f"station_candidates_{scenario}.csv",
+        station_candidates_export_csv(
+            candidates_table, scenario, demo_notice=demo_notice, synthetic_label=synthetic_label
+        ),
+        f"station_candidates_{scenario}.geojson",
+        station_candidates_geojson(
+            candidates_table, scenario, demo_notice=demo_notice, synthetic_label=synthetic_label
+        ),
+    ), None
+
+
+def write_scenario_exports(
+    data: DashboardData,
+    scenario: str,
+    exports_dir: Path = EXPORTS_DIR,
+) -> tuple[list[Path], list[str]]:
+    """Write available CSV and GeoJSON exports for ``scenario`` under ``exports_dir``."""
+    exports_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    notes: list[str] = []
+    for kind, label in (("corridors", "Corridors"), ("station_candidates", "Station candidates")):
+        payload, reason = _export_payloads(data, scenario, kind)
+        if payload is None:
+            if reason and not (
+                kind == "station_candidates"
+                and scenario == "baseline"
+                and data.get("station_candidates") is None
+            ):
+                notes.append(f"{label} export skipped: {reason}" if "issue " in reason else reason)
+            continue
+        csv_name, csv_bytes, geojson_name, geojson_bytes = payload
+        for filename, content in ((csv_name, csv_bytes), (geojson_name, geojson_bytes)):
+            target = exports_dir / filename
+            target.write_bytes(content)
+            written.append(target)
+    return written, notes
+
+
+def _render_download_buttons(
+    csv_container,
+    geojson_container,
+    payload: tuple[str, bytes, str, bytes],
+    *,
+    csv_label: str,
+    geojson_label: str,
+    key_prefix: str,
+) -> None:
+    csv_name, csv_bytes, geojson_name, geojson_bytes = payload
+    csv_container.download_button(
+        csv_label, csv_bytes, csv_name, "text/csv", key=f"{key_prefix}_csv"
+    )
+    geojson_container.download_button(
+        geojson_label,
+        geojson_bytes,
+        geojson_name,
+        "application/geo+json",
+        key=f"{key_prefix}_geojson",
+    )
+
+
+def render_sidebar_exports(data: DashboardData, scenario: str, exports_dir: Path) -> None:
+    sidebar = st.sidebar
+    sidebar.divider()
+    sidebar.header("Exports")
+
+    for kind, csv_label, geojson_label in (
+        ("corridors", "📥 Corridors (CSV)", "🗺️ Corridors (GeoJSON)"),
+        ("station_candidates", "📥 Station candidates (CSV)", "🗺️ Station candidates (GeoJSON)"),
+    ):
+        payload, reason = _export_payloads(data, scenario, kind)
+        if payload is not None:
+            _render_download_buttons(
+                sidebar,
+                sidebar,
+                payload,
+                csv_label=csv_label,
+                geojson_label=geojson_label,
+                key_prefix=f"sidebar_{kind}_{scenario}",
+            )
+        elif data.get(kind) is None and not (
+            kind == "station_candidates" and scenario == "baseline"
+        ):
+            sidebar.warning(reason)
+        elif reason:
+            sidebar.caption(reason)
+
+    if sidebar.button("💾 Save exports to outputs/exports/", key=f"save_exports_{scenario}"):
+        written, notes = write_scenario_exports(data, scenario, exports_dir)
+        if written:
+            sidebar.success("Saved: " + ", ".join(p.name for p in written))
+        for note in notes:
+            sidebar.info(note)
+
+
+def render_tables(
+    data: DashboardData,
+    scenario: str,
+    exports_dir: Path = EXPORTS_DIR,
+) -> None:
+    corridors_table = data.get("corridors")
+    candidates_table = data.get("station_candidates")
+    corridors = for_scenario(corridors_table, scenario)
+    candidates = for_scenario(candidates_table, scenario)
     tab1, tab2, tab3 = st.tabs(["Top corridors", "Station candidates", "Methodology & limitations"])
 
     with tab1:
-        if corridors.empty:
+        payload, reason = _export_payloads(data, scenario, "corridors")
+        if corridors_table is None:
+            st.warning(reason)
+        elif corridors.empty:
             st.write("No corridors for this scenario.")
         else:
-            table = corridors.sort_values("rank")
-            st.dataframe(table, hide_index=True, width="stretch")
-            st.download_button(
-                "📥 Export corridors (CSV)",
-                export_csv(table),
-                f"corridors_{scenario}.csv",
-                "text/csv",
+            st.dataframe(corridors.sort_values("rank"), hide_index=True, width="stretch")
+            col_csv, col_geojson = st.columns(2)
+            _render_download_buttons(
+                col_csv,
+                col_geojson,
+                payload,
+                csv_label="📥 Export corridors (CSV)",
+                geojson_label="🗺️ Export corridors (GeoJSON)",
+                key_prefix=f"tab_corridors_{scenario}",
             )
 
     with tab2:
-        if candidates.empty:
+        payload, reason = _export_payloads(data, scenario, "station_candidates")
+        if candidates_table is None:
+            if scenario == "baseline":
+                st.write("No proposed stations in this scenario.")
+            else:
+                st.warning(reason)
+        elif candidates.empty:
             st.write("No proposed stations in this scenario.")
         else:
-            table = candidates.sort_values("rank")
             st.caption("Candidates without a rank were not selected as new stations.")
-            st.dataframe(table, hide_index=True, width="stretch")
-            st.download_button(
-                "📥 Export station candidates (CSV)",
-                export_csv(table),
-                f"station_candidates_{scenario}.csv",
-                "text/csv",
+            st.dataframe(
+                candidates.sort_values("rank", na_position="last"),
+                hide_index=True,
+                width="stretch",
+            )
+            col_csv, col_geojson = st.columns(2)
+            _render_download_buttons(
+                col_csv,
+                col_geojson,
+                payload,
+                csv_label="📥 Export station candidates (CSV)",
+                geojson_label="🗺️ Export station candidates (GeoJSON)",
+                key_prefix=f"tab_candidates_{scenario}",
             )
 
     with tab3:
@@ -958,6 +1305,7 @@ def main() -> None:
         st.warning(str(err))
         config = {}
     settings = render_sidebar(config)
+    exports_dir = resolve_exports_dir(config)
 
     cache_key = (os.environ.get(DATA_DIR_ENV), _latest_change())
     try:
@@ -967,6 +1315,7 @@ def main() -> None:
         st.error(f"**The dashboard cannot start because of a data problem.**\n\n{err}")
         st.stop()
 
+    render_sidebar_exports(data, settings.scenario, exports_dir)
     render_header(data)
     for warning in data.warnings:
         st.warning(warning)
@@ -995,7 +1344,7 @@ def main() -> None:
     render_detail_panel(map_state)
 
     render_scenario_comparison(data, settings)
-    render_tables(data, settings.scenario)
+    render_tables(data, settings.scenario, exports_dir)
 
 
 if __name__ == "__main__":
