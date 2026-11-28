@@ -27,6 +27,7 @@ from bubi.contracts.io import load_contract_table
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PROCESSED_DIR = REPO_ROOT / "data" / "processed"
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
+EXPORTS_DIR = REPO_ROOT / "outputs" / "exports"
 CONFIG_PATH = REPO_ROOT / "config" / "default_config.yaml"
 DATA_DIR_ENV = "BUBI_DATA_DIR"
 
@@ -34,6 +35,17 @@ DATA_DIR_ENV = "BUBI_DATA_DIR"
 REQUIRED_TABLES = ("stations", "edges")
 # Missing or invalid optional tables only switch off the layers that use them.
 OPTIONAL_TABLES = ("population", "station_candidates", "edge_scores", "corridors", "routes")
+
+# Owning issue for each contract table, shown when a file is missing or invalid.
+TABLE_ISSUES: dict[str, str] = {
+    "stations": "#19",
+    "population": "#23",
+    "edges": "#15",
+    "station_candidates": "#39",
+    "routes": "#31 / #36",
+    "edge_scores": "#21",
+    "corridors": "#37",
+}
 
 SCENARIOS = ("baseline", "lane_aware", "population_only")
 BUDAPEST_CENTER = (47.4979, 19.0541)
@@ -51,6 +63,7 @@ class DashboardData:
     sources: dict[str, str] = field(default_factory=dict)  # "processed" or "fixtures"
     tables: dict[str, pd.DataFrame] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    table_errors: dict[str, str] = field(default_factory=dict)
 
     def get(self, name: str) -> pd.DataFrame | None:
         return self.tables.get(name)
@@ -63,6 +76,8 @@ class DashboardData:
     @property
     def source(self) -> str:
         """``processed``, ``fixtures`` or ``mixed``, for the data-mode badge."""
+        if not self.tables:
+            return "fixtures"
         kinds = {self.sources[name] for name in self.tables}
         return kinds.pop() if len(kinds) == 1 else "mixed"
 
@@ -107,24 +122,48 @@ def _first_lines(text: str, max_lines: int = 3, max_chars: int = 400) -> str:
     return short if len(short) <= max_chars else short[:max_chars] + "…"
 
 
+def table_issue(table_name: str) -> str:
+    """Return the issue reference that produces ``table_name``."""
+    return TABLE_ISSUES.get(table_name, "unknown issue")
+
+
+def _format_table_file(table_name: str, path: Path | None) -> str:
+    expected_name = f"{table_name}.parquet"
+    if path is None:
+        return f"`{expected_name}`"
+    if path.name == expected_name:
+        return f"`{path}`"
+    return f"`{path}` (`{expected_name}`)"
+
+
+def missing_table_message(table_name: str, path: Path | None = None) -> str:
+    """Explain a missing table by naming its file and the producing issue."""
+    file_ref = _format_table_file(table_name, path)
+    return (
+        f"The `{table_name}` table is missing. Expected file: {file_ref} "
+        f"(produced by issue {table_issue(table_name)}). "
+        "Run `make fixtures` to recreate the sample data."
+    )
+
+
 def load_table(table_name: str, path: Path) -> pd.DataFrame:
     """Load one contract table and validate it, turning failures into clear messages."""
+    file_ref = _format_table_file(table_name, path)
+    issue = table_issue(table_name)
     try:
         return load_contract_table(table_name, path, validate=True)
     except FileNotFoundError as err:
-        raise DashboardDataError(
-            f"The `{table_name}` table is missing. Expected file: `{path}`. "
-            "Run `make fixtures` to recreate the sample data."
-        ) from err
+        raise DashboardDataError(missing_table_message(table_name, path)) from err
     except (pa_errors.SchemaError, pa_errors.SchemaErrors) as err:
         raise DashboardDataError(
-            f"The `{table_name}` table at `{path}` does not match its data contract "
-            f"(`src/bubi/contracts/schemas.py`):\n\n{_first_lines(err)}"
+            f"The `{table_name}` table at {file_ref} (produced by issue {issue}) "
+            f"does not match its data contract (`src/bubi/contracts/schemas.py`):\n\n"
+            f"{_first_lines(err)}"
         ) from err
     except Exception as err:  # unreadable or corrupt file
         raise DashboardDataError(
-            f"The `{table_name}` table at `{path}` could not be read "
-            f"({type(err).__name__}: {_first_lines(err, max_lines=1)})."
+            f"The `{table_name}` table at {file_ref} (produced by issue {issue}) "
+            f"could not be read ({type(err).__name__}: {_first_lines(err, max_lines=1)})."
         ) from err
 
 
@@ -143,8 +182,29 @@ def load_dashboard_data(data_dir: Path | None = None) -> DashboardData:
         except DashboardDataError as err:
             if name in REQUIRED_TABLES:
                 raise
+            data.table_errors[name] = str(err)
             data.warnings.append(f"Layers using `{name}` are switched off. {err}")
     return data
+
+
+def demo_notice_text(data: DashboardData) -> str:
+    """Human-readable D5 demo-mode notice including the active data source."""
+    source_labels = {
+        "fixtures": "sample fixtures",
+        "processed": "pipeline outputs",
+        "mixed": "pipeline outputs + sample fixtures",
+    }
+    source = source_labels.get(data.source, data.source)
+    return f"Synthetic demo data (D5) · {source}"
+
+
+def resolve_exports_dir(config: dict[str, Any] | None = None) -> Path:
+    """Directory where dashboard CSV and GeoJSON exports are saved."""
+    configured = (config or {}).get("paths", {}).get("exports_dir")
+    if not configured:
+        return EXPORTS_DIR
+    path = Path(configured)
+    return path if path.is_absolute() else REPO_ROOT / path
 
 
 def fixture_notes(data: DashboardData) -> list[str]:
@@ -157,28 +217,29 @@ def fixture_notes(data: DashboardData) -> list[str]:
     return notes
 
 
-def load_config(path: Path = CONFIG_PATH) -> dict[str, Any]:
+def load_config(path: Path | None = None) -> dict[str, Any]:
     """Read the project config. A missing file gives ``{}``, so the dashboard uses defaults.
 
     Raises:
         DashboardDataError: if the file exists but cannot be read or is not a YAML mapping,
             so the app can say so instead of silently falling back to defaults.
     """
+    target = CONFIG_PATH if path is None else path
     try:
-        with open(path, encoding="utf-8") as handle:
+        with open(target, encoding="utf-8") as handle:
             config = yaml.safe_load(handle)
     except FileNotFoundError:
         return {}
     except (OSError, yaml.YAMLError) as err:
         raise DashboardDataError(
-            f"The config file `{path}` could not be read ({type(err).__name__}: "
+            f"The config file `{target}` could not be read ({type(err).__name__}: "
             f"{_first_lines(err, max_lines=1)}). Using default settings."
         ) from err
     if config is None:
         return {}
     if not isinstance(config, dict):
         raise DashboardDataError(
-            f"The config file `{path}` is not a YAML mapping. Using default settings."
+            f"The config file `{target}` is not a YAML mapping. Using default settings."
         )
     return config
 

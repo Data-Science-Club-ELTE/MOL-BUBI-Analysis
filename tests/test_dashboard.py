@@ -27,6 +27,8 @@ from bubi.dashboard.app import (
     Settings,
     build_map,
     compass_headings,
+    corridors_export_csv,
+    corridors_geojson,
     export_csv,
     lane_status_geojson,
     legend_html,
@@ -35,12 +37,16 @@ from bubi.dashboard.app import (
     route_volume_layer,
     route_volume_per_edge,
     shift_right,
+    station_candidates_export_csv,
+    station_candidates_geojson,
     volume_classes,
+    write_scenario_exports,
 )
 from bubi.dashboard.data import (
     DATA_DIR_ENV,
     OPTIONAL_TABLES,
     REQUIRED_TABLES,
+    TABLE_ISSUES,
     DashboardDataError,
     as_id_list,
     cell_center,
@@ -624,3 +630,222 @@ def test_broken_config_is_reported_not_ignored(tmp_path: Path, text: str):
     path.write_text(text, encoding="utf-8")
     with pytest.raises(DashboardDataError, match="Using default settings"):
         load_config(path)
+
+
+# ---------------------------------------------------------------- week 4: exports & blocked states
+
+
+@pytest.mark.parametrize(
+    ("table_name", "filename"),
+    [
+        ("corridors", "sample_corridors.parquet"),
+        ("station_candidates", "sample_station_candidates.parquet"),
+        ("edge_scores", "sample_edge_scores.parquet"),
+        ("population", "sample_population.parquet"),
+        ("routes", "sample_routes.parquet"),
+    ],
+)
+def test_missing_table_names_file_and_producing_issue(
+    fixture_copy: Path, table_name: str, filename: str
+):
+    (fixture_copy / filename).unlink()
+    data = load_dashboard_data(fixture_copy)
+
+    assert table_name in data.table_errors
+    error_text = data.table_errors[table_name]
+    assert filename in error_text
+    assert f"{table_name}.parquet" in error_text
+    assert TABLE_ISSUES[table_name] in error_text
+    assert any(TABLE_ISSUES[table_name] in w and filename in w for w in data.warnings)
+
+
+def test_invalid_corridors_names_file_and_issue(fixture_copy: Path):
+    bad = pd.DataFrame([{"scenario": "baseline", "corridor_id": "c1", "rank": -5}])
+    bad.to_parquet(fixture_copy / "sample_corridors.parquet", index=False)
+
+    data = load_dashboard_data(fixture_copy)
+
+    assert "corridors" in data.table_errors
+    assert "sample_corridors.parquet" in data.table_errors["corridors"]
+    assert TABLE_ISSUES["corridors"] in data.table_errors["corridors"]
+
+
+def test_build_map_reports_blocked_layers_instead_of_silent_empty_layer(fixture_copy: Path):
+    for filename in (
+        "sample_corridors.parquet",
+        "sample_station_candidates.parquet",
+        "sample_population.parquet",
+        "sample_routes.parquet",
+    ):
+        (fixture_copy / filename).unlink()
+
+    data = load_dashboard_data(fixture_copy)
+    settings = replace(
+        ALL_LAYERS,
+        scenario="lane_aware",
+        show_population=True,
+        show_routes=True,
+        show_corridors=True,
+        show_proposed=True,
+    )
+    _, notes = build_map(data, settings)
+
+    joined = "\n".join(notes)
+    for table_name in ("corridors", "station_candidates", "population", "routes"):
+        assert f"{table_name}.parquet" in joined
+        assert TABLE_ISSUES[table_name] in joined
+
+
+def test_app_shows_blocked_warning_when_corridors_missing(monkeypatch, fixture_copy: Path):
+    (fixture_copy / "sample_corridors.parquet").unlink()
+    at = _run_app(monkeypatch, fixture_copy)
+
+    assert not at.exception
+    warnings = [w.value for w in at.warning]
+    assert any("sample_corridors.parquet" in w and TABLE_ISSUES["corridors"] in w for w in warnings)
+
+
+def test_corridors_exports_open_as_plain_csv_and_geojson_with_demo_labels(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    corridors = data.get("corridors")
+    edges = data.get("edges")
+
+    csv_bytes = corridors_export_csv(
+        corridors,
+        "baseline",
+        demo_notice="Synthetic demo data (D5) · sample fixtures",
+        synthetic_label="Synthetic demo data (D5): not observed cycling",
+    )
+    csv_df = pd.read_csv(io.BytesIO(csv_bytes))
+    assert not csv_df.empty
+    assert (csv_df["scenario"] == "baseline").all()
+    assert (csv_df["demo_notice"] == "Synthetic demo data (D5) · sample fixtures").all()
+    assert (csv_df["synthetic_label"] == "Synthetic demo data (D5): not observed cycling").all()
+    assert isinstance(json.loads(csv_df.loc[0, "edge_ids"]), list)
+
+    gj_bytes = corridors_geojson(
+        corridors,
+        edges,
+        "baseline",
+        demo_notice="Synthetic demo data (D5) · sample fixtures",
+        synthetic_label="Synthetic demo data (D5): not observed cycling",
+    )
+    parsed = json.loads(gj_bytes.decode("utf-8"))
+    assert parsed["type"] == "FeatureCollection"
+    assert "D5" in parsed["metadata"]["demo_notice"]
+    assert "Synthetic" in parsed["metadata"]["synthetic_label"]
+    assert len(parsed["features"]) == len(csv_df)
+    for feature in parsed["features"]:
+        assert feature["geometry"]["type"] in ("LineString", "MultiLineString")
+        assert feature["properties"]["demo_notice"] == "Synthetic demo data (D5) · sample fixtures"
+        assert "Synthetic" in feature["properties"]["synthetic_label"]
+
+    gdf = gpd.read_file(io.BytesIO(gj_bytes))
+    assert len(gdf) == len(csv_df)
+    assert "demo_notice" in gdf.columns and "synthetic_label" in gdf.columns
+
+
+def test_station_candidates_exports_open_as_plain_csv_and_geojson(fixtures_dir: Path):
+    data = load_dashboard_data(fixtures_dir)
+    candidates = data.get("station_candidates").copy()
+    candidates["rank"] = candidates["rank"].astype("Int64")
+    candidates.loc[candidates.index[1], "rank"] = pd.NA
+
+    csv_bytes = station_candidates_export_csv(
+        candidates,
+        "lane_aware",
+        demo_notice="Synthetic demo data (D5) · sample fixtures",
+        synthetic_label="Synthetic demo data (D5): not observed cycling",
+    )
+    csv_df = pd.read_csv(io.BytesIO(csv_bytes))
+    assert len(csv_df) == 2
+    assert (csv_df["demo_notice"] == "Synthetic demo data (D5) · sample fixtures").all()
+    assert "Synthetic" in csv_df.loc[0, "synthetic_label"]
+
+    gj_bytes = station_candidates_geojson(
+        candidates,
+        "lane_aware",
+        demo_notice="Synthetic demo data (D5) · sample fixtures",
+        synthetic_label="Synthetic demo data (D5): not observed cycling",
+    )
+    parsed = json.loads(gj_bytes.decode("utf-8"))
+    assert parsed["type"] == "FeatureCollection"
+    assert len(parsed["features"]) == 2
+    ranks = [f["properties"]["rank"] for f in parsed["features"]]
+    assert 1 in ranks and None in ranks
+    for feature in parsed["features"]:
+        assert feature["geometry"]["type"] == "Point"
+        assert feature["properties"]["demo_notice"] == "Synthetic demo data (D5) · sample fixtures"
+        assert "Synthetic" in feature["properties"]["synthetic_label"]
+
+    gdf = gpd.read_file(io.BytesIO(gj_bytes))
+    assert len(gdf) == 2
+
+
+def test_export_builders_enforce_contract_schemas(sample_edges):
+    bad_corridors = pd.DataFrame([{"scenario": "baseline", "corridor_id": "c1"}])
+    with pytest.raises(Exception):
+        corridors_export_csv(bad_corridors, "baseline")
+    with pytest.raises(Exception):
+        corridors_geojson(bad_corridors, sample_edges, "baseline")
+
+    bad_candidates = pd.DataFrame([{"scenario": "baseline", "cell_id": "891e037aacfffff"}])
+    with pytest.raises(Exception):
+        station_candidates_export_csv(bad_candidates, "lane_aware")
+    with pytest.raises(Exception):
+        station_candidates_geojson(bad_candidates, "lane_aware")
+
+
+def test_write_scenario_exports_writes_files_with_scenario_in_name(
+    tmp_path: Path, fixtures_dir: Path
+):
+    data = load_dashboard_data(fixtures_dir)
+    written, notes = write_scenario_exports(data, "lane_aware", exports_dir=tmp_path)
+
+    names = sorted(p.name for p in written)
+    assert names == [
+        "corridors_lane_aware.csv",
+        "corridors_lane_aware.geojson",
+        "station_candidates_lane_aware.csv",
+        "station_candidates_lane_aware.geojson",
+    ]
+    assert notes == []
+    for path in written:
+        assert path.exists() and path.stat().st_size > 0
+        if path.suffix == ".csv":
+            df = pd.read_csv(path)
+            assert "demo_notice" in df.columns and "synthetic_label" in df.columns
+        else:
+            gdf = gpd.read_file(path)
+            assert "demo_notice" in gdf.columns and "synthetic_label" in gdf.columns
+
+
+def test_app_exposes_csv_and_geojson_exports_and_saves_to_exports_dir(
+    monkeypatch, tmp_path: Path, fixtures_dir: Path
+):
+    config_path = tmp_path / "config.yaml"
+    exports_dir = tmp_path / "outputs" / "exports"
+    config_path.write_text(
+        f"paths:\n  exports_dir: '{exports_dir}'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("bubi.dashboard.data.CONFIG_PATH", config_path)
+
+    at = _run_app(monkeypatch, fixtures_dir)
+    at.sidebar.radio[0].set_value("lane_aware").run()
+    assert not at.exception
+
+    save_btn = next(b for b in at.sidebar.button if "Save exports" in b.label)
+    save_btn.click().run()
+    assert not at.exception
+    assert (exports_dir / "corridors_lane_aware.csv").exists()
+    assert (exports_dir / "corridors_lane_aware.geojson").exists()
+    assert (exports_dir / "station_candidates_lane_aware.csv").exists()
+    assert (exports_dir / "station_candidates_lane_aware.geojson").exists()
+
+
+def test_app_starts_cleanly_from_processed_tables(monkeypatch):
+    monkeypatch.delenv(DATA_DIR_ENV, raising=False)
+    at = _run_app(monkeypatch, None)
+    assert not at.exception
+    assert not at.error
